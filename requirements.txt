@@ -3,7 +3,7 @@ uvicorn
 sqlalchemy
 crewai[google-genai]==1.9.3
 crewai-tools==1.9.3
+litellm==1.52.12  # Specific stable version
+google-generativeai
 openai
 groq
-litellm
-google-generativeai
