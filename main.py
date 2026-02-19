@@ -40,7 +40,7 @@ class MySearchTool(BaseTool):
         return SerperDevTool().run(search_query=str(query))
 
 search_tool = MySearchTool()
-my_llm = LLM(model="google_ai_studio/gemini-1.5-flash", temperature=0.1, api_version="v1")
+my_llm = LLM(model="gemini/gemini-1.5-flash", temperature=0.1, api_version="v1")
 
 class UserRequest(BaseModel):
     question: str
