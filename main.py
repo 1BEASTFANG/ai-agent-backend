@@ -40,7 +40,7 @@ class MySearchTool(BaseTool):
         return SerperDevTool().run(search_query=str(query))
 
 search_tool = MySearchTool()
-my_llm = LLM(model="groq/llama-3.3-70b-versatile", temperature=0.1,base_url="https://api.groq.com/openai/v1")
+my_llm = LLM(model="gemini/gemini-1.5-flash", temperature=0.1)
 
 class UserRequest(BaseModel):
     question: str
