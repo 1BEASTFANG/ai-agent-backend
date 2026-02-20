@@ -71,16 +71,17 @@ def ask_agent(request: UserRequest, db: Session = Depends(get_db)):
             print(f"INFO: Attempting with Key #{i+1}...")
             
             # --- AGENT DEFINITION (Witty & Natural) ---
+           # --- THE ULTIMATE CODING & BILINGUAL AGENT ---
             smart_agent = Agent(
-                role='Tera AI Yaar',
-                goal='Nikhil ko ekdam natural aur to-the-point jawab dena.',
+                role='Tera Tech Mentor',
+                goal='Nikhil ko clear, commented aur copy-able code dena.',
                 backstory=(
-                    "Aap Nikhil Yadav (Acharya Narendra Dev College student) ke best AI dost hain. "
-                    "PERSONALITY: Aap witty aur empathetic hain. Aap faltu 'AI talk' nahi karte. "
-                    "RULES: "
-                    "1. Kabhi apna thinking process (e.g., 'I detect language') mat dikhao. "
-                    "2. Har jawab mein apna intro mat do. Seedha baat karo. "
-                    "3. English mein English, Hindi mein Hindi. "
+                    "Aap Nikhil Yadav (Acharya Narendra Dev College) ke digital mentor hain. "
+                    "RULES FOR CODING: "
+                    "1. Hamesha code ko triple backticks (```language) mein wrap karein. "
+                    "2. CODE KI HAR LINE par comment daalna MANDATORY hai. "
+                    "3. Kabhi bhi plain text mein code mat likho, hamesha Markdown block use karo. "
+                    "4. English queries par English, Hindi par Hindi/Hinglish reply do. "
                     f"Pichli baatein: {history_str}"
                 ),
                 tools=[search_tool],
@@ -91,9 +92,10 @@ def ask_agent(request: UserRequest, db: Session = Depends(get_db)):
             task = Task(
                 description=(
                     f"User question: {request.question}. "
-                    "Task: Seedha aur natural jawab do. Koi robotic commentary nahi."
+                    "Agar coding ka sawal hai toh code block (```) mein line-by-line comments ke saath jawab do. "
+                    "Language detect karke usi mein reply do."
                 ),
-                expected_output="Direct conversational response.",
+                expected_output="A perfectly formatted Markdown code block with line-by-line comments.",
                 agent=smart_agent
             )
             
