@@ -44,11 +44,12 @@ search_tool = MySearchTool()
 or_api_key = os.getenv("OPENROUTER_API_KEY", "").strip()
 
 # 2. OpenRouter ke liye LLM define karein
+# OpenRouter ke liye updated stable model name
 my_llm = LLM(
-    model="openrouter/google/gemini-flash-1.5", 
+    model="openrouter/google/gemini-2.0-flash-exp:free", # Naya aur free model
     temperature=0.1,
     base_url="https://openrouter.ai/api/v1",
-    api_key=or_api_key # Yahan humne naya variable use kiya hai
+    api_key=or_api_key
 )
 
 class UserRequest(BaseModel):
