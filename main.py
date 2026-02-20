@@ -58,23 +58,30 @@ def get_total_valid_keys():
 class UserRequest(BaseModel):
     question: str
 
-# --- 🚀 SUPERCHARGED TOPIC ROUTER (English + Hinglish) ---
+# --- 🚀 MEGA TOPIC ROUTER (Highly Expanded) ---
 def detect_category(text):
     text = text.lower()
     
     # 1. Data Science & Analysis
-    data_words = ['data', 'pandas', 'matplotlib', 'seaborn', 'csv', 'dataset', 'plot', 'graph', 'chart', 'analysis', 'clean', 'visual', 'aggregate', 'calldata', 'diamonds', 'movies']
-    # 2. Core CS, DSA & Backend
-    coding_words = ['code', 'python', 'c++', 'django', 'error', 'bug', 'script', 'function', 'logic', 'dsa', 'render', 'ubuntu', 'api', 'opengl', 'vulkan', 'imgui', 'linked list', 'stack', 'queue', 'backend', 'deploy', 'program']
+    data_words = ['data', 'pandas', 'matplotlib', 'seaborn', 'csv', 'dataset', 'plot', 'graph', 'chart', 'analysis', 'clean', 'visual', 'aggregate', 'calldata', 'diamonds', 'movies', 'dataframe', 'numpy']
+    # 2. Core CS, DSA, Graphics & Backend
+    coding_words = ['code', 'python', 'c++', 'django', 'error', 'bug', 'script', 'function', 'logic', 'dsa', 'render', 'ubuntu', 'api', 'opengl', 'vulkan', 'imgui', 'linked list', 'doubly linked list', 'node', 'pointer', 'stack', 'queue', 'backend', 'deploy', 'program', 'music player']
     # 3. College, Academics & Presentations
-    college_words = ['college', 'assignment', 'presentation', 'ppt', 'slide', 'sdg', 'sustainable', 'goals', 'physical science', 'physics', 'exam', 'study', 'notes', 'project']
-    # 4. News & General Info
-    news_words = ['news', 'aaj', 'khabar', 'match', 'samachar', 'update', 'latest', 'aaj ki', 'current affairs', 'duniya', 'world', 'india']
+    college_words = ['college', 'assignment', 'presentation', 'ppt', 'slide', 'sdg', 'sustainable', 'goals', 'physical science', 'physics', 'exam', 'study', 'notes', 'project', 'andc', 'acharya narendra dev']
+    # 4. News & Current Affairs
+    news_words = ['news', 'aaj', 'khabar', 'match', 'samachar', 'update', 'latest', 'current affairs', 'duniya', 'world', 'india', 'headline', 'summit', 'event', 'today']
+    # 5. Location, Weather & Geography
+    location_words = ['location', 'kaha', 'kahan', 'delhi', 'weather', 'map', 'distance', 'place', 'city', 'country', 'address', 'mausam', 'direction', 'rasta']
+    # 6. Math & Calculations
+    math_words = ['math', 'calculate', 'calculation', 'formula', 'solve', 'equation', 'plus', 'minus', 'multiply', 'divide', 'algebra', 'calculus', 'integration', 'derivation', 'matrix', 'maths']
     
+    # Priority matching
     if any(word in text for word in data_words): return 'data_science'
     if any(word in text for word in coding_words): return 'coding'
     if any(word in text for word in college_words): return 'college'
     if any(word in text for word in news_words): return 'news'
+    if any(word in text for word in location_words): return 'location'
+    if any(word in text for word in math_words): return 'math'
     
     return 'general'
 
@@ -88,9 +95,9 @@ def ask_agent(request: UserRequest, db: Session = Depends(get_db)):
     if past_messages:
         last_msg_category = detect_category(past_messages[0].user_query)
         
-        # Smart Drop: Agar user Data Science se achanak News par shift ho, toh memory clear!
+        # SMART DROP: Memory cleared if topic changes!
         if current_category != 'general' and last_msg_category != 'general' and current_category != last_msg_category:
-            print(f"INFO: Context shift detected ({last_msg_category} -> {current_category}). Memory flushed to save tokens!")
+            print(f"INFO: Topic shift ({last_msg_category} -> {current_category}). Memory flushed to save tokens!")
             history_str = "[System: Topic changed by user. Previous context cleared for efficiency.]\n"
         else:
             for m in reversed(past_messages):
@@ -111,14 +118,14 @@ def ask_agent(request: UserRequest, db: Session = Depends(get_db)):
                 f"Date: {current_date}. Aap Nikhil Yadav aur Arvind Kumar ke smart AI dost ho. "
                 "TOP 10 SNIPER RULES (FOLLOW STRICTLY): "
                 "1. SCRIPT: Use ONLY Roman Hinglish (e.g., 'kya haal hai'). NEVER use Devanagari Hindi. "
-                "2. CONCISENESS: For greetings or casual chat (hi, hello), reply naturally in just 1 line. "
+                "2. CONCISENESS: For casual chat, reply naturally in just 1 line. "
                 "3. TOOL SECRECY: NEVER output internal code like '-function=internet_search>'. Keep it hidden. "
-                "4. NEWS/FACTS: If asked for news, search the web and give 3-4 crisp bullet points. "
+                "4. FACTS/NEWS: Search the web and give 3-4 crisp bullet points. No fluff. "
                 "5. CODING: Provide Markdown code ONLY if explicitly asked. Keep comments clear. "
-                "6. NO FLUFF: Never say 'I am an AI' or 'I apologize'. Start directly with the answer. "
-                "7. EXPERT: Maintain high technical accuracy for C++, Python, Django, and Data Science queries. "
+                "6. NO FLUFF: Never say 'I am an AI' or 'I apologize'. Start directly. "
+                "7. EXPERT: Maintain high accuracy for CS, Math, and Data Science queries. "
                 "8. CONTEXT AWARE: Read chat history. Do not repeat the same phrases. "
-                "9. MIRRORING: If user is short, be short. If user asks for details, be detailed. "
+                "9. MIRRORING: If user is short, be short. If user asks details, be detailed. "
                 "10. NO KEY TAGS: NEVER type '[Key: X]' yourself. The backend handles it. "
                 f"\n--- Chat History ---\n{history_str}\n-------------------"
             )
@@ -156,4 +163,4 @@ def ask_agent(request: UserRequest, db: Session = Depends(get_db)):
 
 @app.get("/")
 def root():
-    return {"message": "Bilingual AI (Supercharged Micro-Router Edition) is Live!"}
+    return {"message": "Bilingual AI (Mega Micro-Router Edition) is Live!"}
