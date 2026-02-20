@@ -28,38 +28,32 @@ def get_db():
     try: yield db
     finally: db.close()
 
-# --- SEARCH TOOL ---
+# --- SEARCH TOOL SETUP ---
 class MySearchTool(BaseTool):
     name: str = "internet_search"
-    description: str = "Use this only for factual info."
+    description: str = "Use this for real-time factual info from the web."
     def _run(self, query: str) -> str:
+        # SERPER_API_KEY environment se automatically uthayi jayegi
         return SerperDevTool().run(search_query=str(query))
 
 search_tool = MySearchTool()
 
-# --- LLM CONFIGURATIONS (Triple Layer) ---
-
-# Layer 1: OpenRouter (Primary)
-or_key = os.getenv("OPENROUTER_API_KEY", "").strip()
-openrouter_llm = LLM(
-    model="openrouter/google/gemini-2.0-flash-exp:free",
-    base_url="https://openrouter.ai/api/v1",
-    api_key=or_key
-)
-
-# Layer 2: Groq (Updated Model for 2026)
-groq_key = os.getenv("GROQ_API_KEY", "").strip()
-groq_llm = LLM(
-    model="groq/llama-3.3-70b-versatile", # Updated from decommissioned model
-    api_key=groq_key
-)
-
-# Layer 3: Direct Google Gemini (The Ultimate Backup)
-google_key = os.getenv("GOOGLE_API_KEY", "").strip()
-google_llm = LLM(
-    model="google/gemini-1.5-flash", 
-    api_key=google_key
-)
+# --- GROQ KEY ROTATION ---
+def get_groq_llm(key_index=0):
+    all_keys = [
+        os.getenv("GROQ_API_KEY_1", "").strip(),
+        os.getenv("GROQ_API_KEY_2", "").strip(),
+        os.getenv("GROQ_API_KEY_3", "").strip()
+    ]
+    valid_keys = [k for k in all_keys if k]
+    if not valid_keys:
+        raise ValueError("Render par koi Groq Key nahi mili!")
+    
+    current_key = valid_keys[key_index % len(valid_keys)]
+    return LLM(
+        model="groq/llama-3.3-70b-versatile",
+        api_key=current_key
+    )
 
 class UserRequest(BaseModel):
     question: str
@@ -69,34 +63,31 @@ def ask_agent(request: UserRequest, db: Session = Depends(get_db)):
     past_messages = db.query(ChatMessage).order_by(ChatMessage.id.desc()).limit(5).all()
     history_str = "".join([f"User: {m.user_query}\nAgent: {m.ai_response}\n" for m in reversed(past_messages)])
 
-    def run_agent(llm_choice, provider_name):
-        print(f"INFO: Attempting with {provider_name}...")
-        agent = Agent(
-            role='Dost Assistant',
-            goal='Friendly and factual answers in Hindi.',
-            backstory=f"Aap ek digital dost hain. History: {history_str}",
-            tools=[search_tool],
-            llm=llm_choice
-        )
-        task = Task(
-            description=f"User question: {request.question}. Answer in Hindi.",
-            expected_output="Short Hindi response.",
-            agent=agent
-        )
-        return str(Crew(agents=[agent], tasks=[task]).kickoff())
-
-    # --- THE TRIPLE FALLBACK LOGIC ---
-    answer = ""
-    try:
-        answer = run_agent(openrouter_llm, "OpenRouter")
-    except Exception:
+    answer = "Maaf kijiye, abhi servers busy hain."
+    
+    # Rotation logic: 3 keys tak try karein
+    for i in range(3):
         try:
-            answer = run_agent(groq_llm, "Groq")
-        except Exception:
-            try:
-                answer = run_agent(google_llm, "Google Direct")
-            except Exception:
-                answer = "Bhai, aaj saare servers thak gaye hain. Thodi der mein try karein!"
+            current_llm = get_groq_llm(i)
+            print(f"INFO: Trying Key #{i+1}...")
+            
+            smart_agent = Agent(
+                role='Dost Assistant',
+                goal='Search internet for latest facts and answer in Hindi.',
+                backstory=f"Aap ek digital dost hain jo internet use kar sakta hai. History: {history_str}",
+                tools=[search_tool], # Search tool yahan wapas aa gaya
+                llm=current_llm
+            )
+            task = Task(
+                description=f"User query: {request.question}. Use search if needed. Answer in Hindi.",
+                expected_output="Detailed Hindi response.",
+                agent=smart_agent
+            )
+            answer = str(Crew(agents=[smart_agent], tasks=[task]).kickoff())
+            break 
+        except Exception as e:
+            print(f"WARN: Key #{i+1} failed: {e}")
+            continue
 
     new_entry = ChatMessage(user_query=request.question, ai_response=answer)
     db.add(new_entry)
@@ -104,4 +95,4 @@ def ask_agent(request: UserRequest, db: Session = Depends(get_db)):
     return {"answer": answer}
 
 @app.get("/")
-def root(): return {"message": "Triple-Layer AI Agent is Live!"}
+def root(): return {"message": "Groq-Powered Agent with Search is Live!"}
