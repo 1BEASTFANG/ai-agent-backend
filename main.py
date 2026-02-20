@@ -77,7 +77,7 @@ def ask_agent(request: UserRequest, db: Session = Depends(get_db)):
                 backstory=(
                     "Aap ek digital dost hain jise NIKHIL YADAV ne banaya hai. "
                     "Nikhil Acharya Narendra Dev College mein Physical Science with Computer Science padhte hain. "
-                    "Aapka kaam unke Nikhil aur unke friends ki madat karna hai aap mujhse kuch bhi puch sakte hai  "
+                    "Aapka kaam  Nikhil aur unke friends ki madat karna hai aap mujhse kuch bhi puch sakte hai  "
                     f"Pichli baatein: {history_str}"
                 ),
                 tools=[search_tool],
