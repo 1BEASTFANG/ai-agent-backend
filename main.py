@@ -42,7 +42,7 @@ class MySearchTool(BaseTool):
 
 search_tool = MySearchTool()
 
-# --- KEY ROTATION LOGIC ---
+# --- KEY ROTATION LOGIC (Scaling up to 50 Keys) ---
 def get_groq_llm(key_index):
     keys = [os.getenv(f"GROQ_API_KEY_{i}", "").strip() for i in range(1, 51)]
     valid_keys = [k for k in keys if k]
@@ -93,7 +93,7 @@ def ask_agent(request: UserRequest, db: Session = Depends(get_db)):
                     9. NO APOLOGIES: Faltu mein 'I apologize' ya 'Sorry' mat bolo.
                     10. WITTY TONE: Thoda humorous aur smart bano, boring nahi.
                     11. CONTEXT: Pichli baatein (History) padh kar hi agla jawab do.
-                    12. NO FLUFF: Jawab seedha point se shuru karo. No 'Hello!' in every message.
+                    12. NO FLUFF: Jawab seedha point se shuru karo. No intro in every message.
                     13. FORMATTING: News ke liye hamesha bullet points use karo.
                     14. TECHNICAL: C++, Python, Django aur DSA mein hamesha expert raho.
                     15. SDG GOALS: India ke 17 SDG goals par hamesha updated raho.
@@ -103,7 +103,7 @@ def ask_agent(request: UserRequest, db: Session = Depends(get_db)):
                     19. SPEED: Jawab hamesha fast aur optimized hona chahiye.
                     20. NO REPETITION: Ek hi phrase baar-baar mat do.
                     21. MIRRORING: User short hai toh short raho, user detailed hai toh detail do.
-                    22. ADAPTIVE: User ke mood ke hisaab se apna tone badlo.
+                    22. ADAPTIVE: User ke mood के हिसाब से अपना tone badlo.
                     23. KEY TRACKER: Har jawab ke aakhir mein key number mention karo.
                     24. NO DEVANAGARI: Agar user Hindi mein likhe, tab bhi Roman Hinglish mein jawab do.
                     25. PROFESSIONAL: CS student ke standards ke hisaab se accurate logic do.
@@ -120,7 +120,7 @@ def ask_agent(request: UserRequest, db: Session = Depends(get_db)):
             task = Task(
                 description=(
                     f"User Query: {request.question}. "
-                    "Action: Analyze the query. If it is news, use the search tool. If it is code, provide it with comments. "
+                    "Action: Analyze the query. If it is news, use search tool. If it is code, use markdown. "
                     "Apply all 25 rules strictly. No Devanagari."
                 ),
                 expected_output="A perfect Hinglish response following all 25 constitution rules.",
@@ -129,7 +129,6 @@ def ask_agent(request: UserRequest, db: Session = Depends(get_db)):
             
             raw_answer = str(Crew(agents=[smart_agent], tasks=[task]).kickoff())
             if raw_answer and not raw_answer.startswith("Agent stopped"):
-                 # Key number already in rules but keeping tracker for safety
                  answer = f"{raw_answer}\n\n[Key: {i+1}]"
                  break 
         except Exception as e:
@@ -143,3 +142,4 @@ def ask_agent(request: UserRequest, db: Session = Depends(get_db)):
 
 @app.get("/")
 def root():
+    return {"message": "Bilingual AI (25+ Rules Master Edition) is Live!"}
