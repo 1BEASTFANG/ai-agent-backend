@@ -57,7 +57,7 @@ groq_llm = LLM(
 # Layer 3: Direct Google Gemini (The Ultimate Backup)
 google_key = os.getenv("GOOGLE_API_KEY", "").strip()
 google_llm = LLM(
-    model="gemini/gemini-1.5-flash",
+    model="google/gemini-1.5-flash", 
     api_key=google_key
 )
 
