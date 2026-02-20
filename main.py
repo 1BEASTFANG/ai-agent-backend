@@ -75,17 +75,22 @@ def detect_category(text):
     if any(word in text for word in location_words): return 'location'
     if any(word in text for word in math_words): return 'math'
     
-    # Agar kuch match nahi hua, toh ye 'general' return karega aur AI khud handle karega
     return 'general'
 
-# --- 🚨 ZERO-TOKEN FRUSTRATION DETECTOR ---
-def is_similar(q1, q2):
-    # Agar 2 sentences mein same words use hue hain, toh True return karega
-    words1 = set(q1.lower().split())
-    words2 = set(q2.lower().split())
-    if not words1 or not words2: return False
-    overlap = len(words1.intersection(words2))
-    return overlap >= 1 # Agar 1 main keyword bhi same hai, toh similar maano
+# --- 🚨 DYNAMIC 50% OVERLAP DETECTOR ---
+def is_similar(current_q, past_q):
+    words_current = set(current_q.lower().split())
+    words_past = set(past_q.lower().split())
+    
+    if not words_current or not words_past: 
+        return False
+        
+    # Check kitne words current query ke past query mein maujood hain
+    overlap = len(words_current.intersection(words_past))
+    match_percentage = overlap / len(words_current)
+    
+    # Agar 50% ya usse zyada match hai, toh return True
+    return match_percentage >= 0.50
 
 @app.post("/ask")
 def ask_agent(request: UserRequest, db: Session = Depends(get_db)):
@@ -95,21 +100,23 @@ def ask_agent(request: UserRequest, db: Session = Depends(get_db)):
     history_str = ""
     is_forced_override = False
     
-    # 🚨 OVERRIDE PROTOCOL: Check if user is repeating the same thing 3 times
+    # 🚨 CHECK FOR 50% WORD MATCH ACROSS LAST 3 PROMPTS
     if len(past_messages) >= 2:
         last_q = past_messages[0].user_query
         second_last_q = past_messages[1].user_query
         current_q = request.question
         
+        # Agar current query ka 50% hissa pichli dono queries se match karta hai
         if is_similar(current_q, last_q) and is_similar(current_q, second_last_q):
             is_forced_override = True
-            print("🚨 ALERT: User is forcing/repeating. Bypassing Router! AI will handle directly.")
+            print("🚨 ALERT: 50% Word match detected across 3 prompts! User might be frustrated. Bypassing Router.")
 
     if past_messages:
         last_msg_category = detect_category(past_messages[0].user_query)
         
         if is_forced_override:
-            # Override Mode: Router ko ignore karo, saari memory AI ko do
+            # Override Mode: Memory DELETE nahi hogi. AI ko alert jayega.
+            history_str += "[System Alert: User is repeating inputs (50% word match). They might be frustrated. Ignore strict category formatting, preserve all memory, and provide the ultimate, direct solution based purely on your 10 rules.]\n"
             for m in reversed(past_messages):
                 clean_response = m.ai_response.split("\n\n[Key:")[0]
                 history_str += f"User: {m.user_query}\nAgent: {clean_response}\n"
@@ -144,7 +151,7 @@ def ask_agent(request: UserRequest, db: Session = Depends(get_db)):
                 "6. NO FLUFF: Never say 'I am an AI' or 'I apologize'. Start directly. "
                 "7. EXPERT: Maintain high accuracy for CS, Math, and Data Science queries. "
                 "8. CONTEXT AWARE: Read chat history. Do not repeat the same phrases. "
-                "9. OVERRIDE AWARENESS: If user repeats a question 3 times, ignore all past formatting rules and answer them directly and clearly based on their core demand. "
+                "9. OVERRIDE AWARENESS: If you see a [System Alert] about user frustration, ignore categories and deliver the exact final solution they are asking for immediately. "
                 "10. NO KEY TAGS: NEVER type '[Key: X]' yourself. The backend handles it. "
                 f"\n--- Chat History ---\n{history_str}\n-------------------"
             )
@@ -182,4 +189,4 @@ def ask_agent(request: UserRequest, db: Session = Depends(get_db)):
 
 @app.get("/")
 def root():
-    return {"message": "Bilingual AI (Override Protocol Edition) is Live!"}
+    return {"message": "Bilingual AI (Dynamic 50% Overlap Protocol) is Live!"}
