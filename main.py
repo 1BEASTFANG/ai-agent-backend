@@ -46,7 +46,7 @@ search_tool = MySearchTool()
 # --- AUTO-SCALING GROQ ROTATION ---
 def get_groq_llm(key_index):
     # Dynamic keys fetcher (Supports unlimited keys if you add them in Render)
-    keys = [os.getenv(f"GROQ_API_KEY_{i}", "").strip() for i in range(1, 10)]
+    keys = [os.getenv(f"GROQ_API_KEY_{i}", "").strip() for i in range(1, 51)]
     valid_keys = [k for k in keys if k]
     if not valid_keys:
         raise ValueError("Render par koi bhi Groq API Key nahi milti!")
@@ -55,7 +55,7 @@ def get_groq_llm(key_index):
     return LLM(model="groq/llama-3.3-70b-versatile", api_key=selected_key)
 
 def get_total_valid_keys():
-    keys = [os.getenv(f"GROQ_API_KEY_{i}", "").strip() for i in range(1, 10)]
+    keys = [os.getenv(f"GROQ_API_KEY_{i}", "").strip() for i in range(1, 51)]
     return len([k for k in keys if k])
 
 class UserRequest(BaseModel):
