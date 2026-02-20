@@ -10,9 +10,7 @@ from crewai.tools import BaseTool
 from crewai_tools import SerperDevTool
 
 # --- SMART DATABASE SETUP (Anti-Amnesia) ---
-# Agar environment variable mein Postgres URL hai toh wo use karega, warna SQLite
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./chat_history.db")
-# Render Postgres URLs start with postgres:// but sqlalchemy needs postgresql://
 if DATABASE_URL.startswith("postgres://"):
     DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
 
@@ -43,16 +41,16 @@ class MySearchTool(BaseTool):
 
 search_tool = MySearchTool()
 
-# --- AUTO-SCALING GROQ ROTATION ---
+# --- AUTO-SCALING GROQ ROTATION (Up to 50 Keys) ---
 def get_groq_llm(key_index):
-    # Dynamic keys fetcher (Supports unlimited keys if you add them in Render)
     keys = [os.getenv(f"GROQ_API_KEY_{i}", "").strip() for i in range(1, 51)]
     valid_keys = [k for k in keys if k]
     if not valid_keys:
         raise ValueError("Render par koi bhi Groq API Key nahi milti!")
     
     selected_key = valid_keys[key_index % len(valid_keys)]
-    return LLM(model="groq/llama-3.3-70b-versatile", api_key=selected_key)
+    # 🔥 TOKEN SAVER: Llama 3.1 8B Instant (Halka, fast aur kam tokens khane wala model)
+    return LLM(model="groq/llama-3.1-8b-instant", api_key=selected_key)
 
 def get_total_valid_keys():
     keys = [os.getenv(f"GROQ_API_KEY_{i}", "").strip() for i in range(1, 51)]
@@ -63,8 +61,8 @@ class UserRequest(BaseModel):
 
 @app.post("/ask")
 def ask_agent(request: UserRequest, db: Session = Depends(get_db)):
-    # 🧠 OPTIMIZED MEMORY: 15 messages for best context without draining tokens
-    past_messages = db.query(ChatMessage).order_by(ChatMessage.id.desc()).limit(15).all()
+    # 🔥 TOKEN SAVER: Memory limit wapas 5 kar di hai taaki tokens drain na hon
+    past_messages = db.query(ChatMessage).order_by(ChatMessage.id.desc()).limit(5).all()
     history_str = "".join([f"User: {m.user_query}\nAgent: {m.ai_response}\n" for m in reversed(past_messages)])
 
     answer = "Maaf kijiye, saari keys abhi busy hain."
@@ -90,7 +88,7 @@ def ask_agent(request: UserRequest, db: Session = Depends(get_db)):
                     "3. NO UNPROMPTED CODE: Jab tak user exactly 'code', 'program' ya 'script' na maange, tab tak galti se bhi code block generate mat karna. "
                     "4. CONTEXT AWARENESS: 'Chat History' ko dhyan se padho. Agar user kisi pichle topic ka code maange, toh history se logic uthao aur bina sawal-jawab kiye turant Markdown (```) mein code do. "
                     "5. MIRRORING: Agar user ka message bohot chota hai, toh tumhara reply bhi chota hona chahiye. "
-                    f"\n--- Chat History (Last 15 Messages) ---\n{history_str}\n-------------------"
+                    f"\n--- Chat History (Last 5 Messages) ---\n{history_str}\n-------------------"
                 ),
                 tools=[search_tool],
                 llm=current_llm,
@@ -124,4 +122,4 @@ def ask_agent(request: UserRequest, db: Session = Depends(get_db)):
     return {"answer": answer}
 
 @app.get("/")
-def root(): return {"message": "Bilingual Auto-Scaling Pro Agent is Ready!"}
+def root(): return {"message": "Bilingual Auto-Scaling Pro Agent (Token Saver) is Ready!"}
