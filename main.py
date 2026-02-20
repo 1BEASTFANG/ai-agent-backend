@@ -58,15 +58,36 @@ def get_total_valid_keys():
 class UserRequest(BaseModel):
     question: str
 
+# --- ZERO-TOKEN TOPIC ROUTER ---
+def detect_category(text):
+    text = text.lower()
+    coding_words = ['code', 'python', 'c++', 'django', 'error', 'bug', 'script', 'function', 'logic', 'dsa']
+    news_words = ['news', 'aaj', 'khabar', 'match', 'samachar', 'update', 'latest', 'aaj ki']
+    
+    if any(word in text for word in coding_words): return 'coding'
+    if any(word in text for word in news_words): return 'news'
+    return 'general'
+
 @app.post("/ask")
 def ask_agent(request: UserRequest, db: Session = Depends(get_db)):
     past_messages = db.query(ChatMessage).order_by(ChatMessage.id.desc()).limit(4).all()
     
-    # 🧠 SMART HISTORY CLEANUP: Purane [Key: X] tags ko agent ki memory se hatana
+    # 🧠 SMART TOPIC SWITCHER (Aapka custom logic)
+    current_category = detect_category(request.question)
     history_str = ""
-    for m in reversed(past_messages):
-        clean_response = m.ai_response.split("\n\n[Key:")[0]
-        history_str += f"User: {m.user_query}\nAgent: {clean_response}\n"
+    
+    if past_messages:
+        last_msg_category = detect_category(past_messages[0].user_query)
+        
+        # Agar topic change hua, toh history DROP kar do
+        if current_category != 'general' and last_msg_category != 'general' and current_category != last_msg_category:
+            print(f"INFO: Topic switched from {last_msg_category} to {current_category}. Dropping memory!")
+            history_str = "[System: User switched topic. Old memory cleared to save tokens.]\n"
+        else:
+            # Topic same hai toh normal history bhejo (cleaning old keys)
+            for m in reversed(past_messages):
+                clean_response = m.ai_response.split("\n\n[Key:")[0]
+                history_str += f"User: {m.user_query}\nAgent: {clean_response}\n"
 
     answer = "Bhai, saari keys busy hain. Thoda wait kar le."
     current_date = datetime.now().strftime("%Y-%m-%d")
@@ -129,4 +150,4 @@ def ask_agent(request: UserRequest, db: Session = Depends(get_db)):
 
 @app.get("/")
 def root():
-    return {"message": "Bilingual AI (Top 10 Sniper Rules Edition) is Live!"}
+    return {"message": "Bilingual AI (Smart Router Edition) is Live!"}
