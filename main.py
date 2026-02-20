@@ -9,9 +9,14 @@ from crewai import Agent, Task, Crew, LLM
 from crewai.tools import BaseTool
 from crewai_tools import SerperDevTool
 
-# --- DATABASE SETUP ---
-DATABASE_URL = "sqlite:///./chat_history.db"
-engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
+# --- SMART DATABASE SETUP (Anti-Amnesia) ---
+# Agar environment variable mein Postgres URL hai toh wo use karega, warna SQLite
+DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./chat_history.db")
+# Render Postgres URLs start with postgres:// but sqlalchemy needs postgresql://
+if DATABASE_URL.startswith("postgres://"):
+    DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
+
+engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False} if "sqlite" in DATABASE_URL else {})
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
@@ -38,59 +43,54 @@ class MySearchTool(BaseTool):
 
 search_tool = MySearchTool()
 
-# --- 4-KEY GROQ ROTATION LOGIC ---
+# --- AUTO-SCALING GROQ ROTATION ---
 def get_groq_llm(key_index):
-    keys = [
-        os.getenv("GROQ_API_KEY_1", "").strip(),
-        os.getenv("GROQ_API_KEY_2", "").strip(),
-        os.getenv("GROQ_API_KEY_3", "").strip(),
-        os.getenv("GROQ_API_KEY_4", "").strip()
-    ]
+    # Dynamic keys fetcher (Supports unlimited keys if you add them in Render)
+    keys = [os.getenv(f"GROQ_API_KEY_{i}", "").strip() for i in range(1, 10)]
     valid_keys = [k for k in keys if k]
     if not valid_keys:
         raise ValueError("Render par koi bhi Groq API Key nahi milti!")
     
     selected_key = valid_keys[key_index % len(valid_keys)]
-    return LLM(
-        model="groq/llama-3.3-70b-versatile",
-        api_key=selected_key
-    )
+    return LLM(model="groq/llama-3.3-70b-versatile", api_key=selected_key)
+
+def get_total_valid_keys():
+    keys = [os.getenv(f"GROQ_API_KEY_{i}", "").strip() for i in range(1, 10)]
+    return len([k for k in keys if k])
 
 class UserRequest(BaseModel):
     question: str
 
 @app.post("/ask")
 def ask_agent(request: UserRequest, db: Session = Depends(get_db)):
-    past_messages = db.query(ChatMessage).order_by(ChatMessage.id.desc()).limit(5).all()
+    # 🧠 OPTIMIZED MEMORY: 15 messages for best context without draining tokens
+    past_messages = db.query(ChatMessage).order_by(ChatMessage.id.desc()).limit(15).all()
     history_str = "".join([f"User: {m.user_query}\nAgent: {m.ai_response}\n" for m in reversed(past_messages)])
 
     answer = "Maaf kijiye, saari keys abhi busy hain."
-    
-    # SYSTEM CURRENT TIME FETCH KAREIN
     current_date = datetime.now().strftime("%Y-%m-%d")
     
-  # YAHAN SE UPDATE KAREIN `ask_agent` ke andar ka loop
-    for i in range(4):
+    total_keys = get_total_valid_keys()
+    loop_count = total_keys if total_keys > 0 else 1 
+
+    for i in range(loop_count):
         try:
             current_llm = get_groq_llm(i)
             print(f"INFO: Attempting with Key #{i+1}...")
             
-            # --- THE ULTIMATE ALL-ROUNDER AGENT ---
-           # --- THE ULTRA-CONCISE ALL-ROUNDER AGENT ---
-           # --- THE ULTRA-CONCISE ALL-ROUNDER AGENT ---
-           # --- THE HINGLISH "BRO" AGENT (STRICTLY CONCISE) ---
+            # --- THE PERFECT HINGLISH "BRO" AGENT ---
             smart_agent = Agent(
-                role='Tera Chill AI Yaar',
-                goal='Ekdam choti baat karna. Roman script mein Hinglish bolna aur bina mange code nahi dena.',
+                role='Tera Smart AI Yaar',
+                goal='Nikhil ko chote, natural jawab dena aur sirf mangne par code dena.',
                 backstory=(
-                    "Aap Nikhil Yadav (Acharya Narendra Dev College) ke personal AI dost ho. "
-                    "CRITICAL RULES (FOLLOW STRICTLY): "
-                    "1. SCRIPT/LANGUAGE: Hamesha Roman script (English alphabets) mein HINGLISH bolo (jaise 'Haan bhai, kya haal hai?'). Devanagari (हिंदी) font bilkul USE MAT KARNA. Agar user pure English puche toh English mein jawab do. "
-                    "2. EXTREMELY SHORT: Greetings ('hi', 'hello', 'kaise ho') ka reply sirf 1 line mein do. Maximum 10-15 words. "
-                    "3. NO FREE CODE (NEVER): Jab tak user explicitly 'code', 'program', ya 'script' na maange, tab tak galti se bhi koi example ya code mat dena. "
-                    "4. IDENTITY: Agar user puche 'Mera naam kya hai?', toh seedha bolo 'Aap Nikhil bhai ho!'. 'Main nahi jaanta' mat bolna. "
-                    "5. NO ROBOTIC TALK: 'Main ek AI hoon', 'Udaharan ke liye', ya 'Kripya batayein' jaise formal words ban hain. Ek chill senior ki tarah baat karo. "
-                    f"Pichli baatein: {history_str}"
+                    f"Aaj {current_date} hai. Aap Nikhil Yadav (ANDC CS student) ke personal digital dost ho. "
+                    "STRICT BEHAVIORAL RULES: "
+                    "1. LANGUAGE: Sirf Roman script (English alphabets) mein HINGLISH (e.g., 'Haan bhai') ya pure English use karo. Devnagari script (हिंदी) STRICTLY BAN hai. "
+                    "2. EXTREMELY CONCISE: Normal baaton (hi, hello, kaise ho) ka jawab sirf 1 ya 2 line mein do. 'Main ek AI hoon' jaisa robotic intro kabhi mat do. "
+                    "3. NO UNPROMPTED CODE: Jab tak user exactly 'code', 'program' ya 'script' na maange, tab tak galti se bhi code block generate mat karna. "
+                    "4. CONTEXT AWARENESS: 'Chat History' ko dhyan se padho. Agar user kisi pichle topic ka code maange, toh history se logic uthao aur bina sawal-jawab kiye turant Markdown (```) mein code do. "
+                    "5. MIRRORING: Agar user ka message bohot chota hai, toh tumhara reply bhi chota hona chahiye. "
+                    f"\n--- Chat History (Last 15 Messages) ---\n{history_str}\n-------------------"
                 ),
                 tools=[search_tool],
                 llm=current_llm,
@@ -99,31 +99,29 @@ def ask_agent(request: UserRequest, db: Session = Depends(get_db)):
             
             task = Task(
                 description=(
-                    f"User query: {request.question}. "
-                    "Instructions: "
-                    "1. Reply in Hinglish (using English alphabets) or English. NO Devanagari script. "
-                    "2. DO NOT output any code block unless the user explicitly requested a program/code. "
-                    "3. Keep the response extremely short and natural. Do not offer unprompted help."
+                    f"Current query: {request.question}. "
+                    "1. Read Chat History to understand the context. "
+                    "2. Reply in strict Roman Hinglish or English. "
+                    "3. Keep it super brief unless code/details are explicitly requested. No Devnagari."
                 ),
-                expected_output="A very short, natural Hinglish response using English alphabets. No code unless explicitly requested.",
+                expected_output="A very natural, short Hinglish response OR a Markdown code block if explicitly requested.",
                 agent=smart_agent
             )
-            answer = str(Crew(agents=[smart_agent], tasks=[task]).kickoff())
             
-            # Agar hum yahan pohoch gaye, iska matlab jawab mil gaya hai! Loop tod do.
+            answer = str(Crew(agents=[smart_agent], tasks=[task]).kickoff())
             if answer and not answer.startswith("Agent stopped"):
-                 break
-                 
+                 break 
         except Exception as e:
-            # Pura error dikhane ke bajaye, sirf ye bataye ki konsi key limit par aa gayi
-            print(f"WARN: Key #{i+1} failed due to: Rate Limit or Connectivity issue. Shifting to next key.")
-            continue # Agli key try karega
+            print(f"WARN: Key #{i+1} failed. Shifting to next key. Error: {e}")
+            continue
 
-    # Agar 4 keys ke baad bhi kuch na mile, toh friendly message do
     if not answer or answer == "Maaf kijiye, saari keys abhi busy hain.":
-         answer = "Bhai, abhi system par bohot load hai aur saari API limits khatam ho chuki hain. Thodi der baad try karna!"
+         answer = "Bhai, abhi system par load hai aur saari API limits khatam ho chuki hain. Thodi der baad try karna!"
 
     new_entry = ChatMessage(user_query=request.question, ai_response=answer)
     db.add(new_entry)
     db.commit()
     return {"answer": answer}
+
+@app.get("/")
+def root(): return {"message": "Bilingual Auto-Scaling Pro Agent is Ready!"}
