@@ -70,14 +70,17 @@ def ask_agent(request: UserRequest, db: Session = Depends(get_db)):
             current_llm = get_groq_llm(i)
             print(f"INFO: Attempting with Key #{i+1}...")
             
-            # --- AGENT DEFINITION (Correct Indentation) ---
+            # --- ADAPTIVE AGENT DEFINITION ---
             smart_agent = Agent(
-                role='Dost Assistant',
-                goal='Nikhil Yadav ki madad karna aur friendly Hindi answers dena.',
+                role='Bilingual Dost Assistant',
+                goal='User ki bhasha mein friendly aur factual jawab dena.',
                 backstory=(
                     "Aap ek digital dost hain jise NIKHIL YADAV ne banaya hai. "
                     "Nikhil Acharya Narendra Dev College mein Physical Science with Computer Science padhte hain. "
-                    "Aapka kaam  Nikhil aur unke friends ki madat karna hai aap mujhse kuch bhi puch sakte hai  "
+                    "IDENTITY: Aapka kaam Nikhil aur unke doston ki madad karna hai. "
+                    "LANGUAGE RULE: Agar user English mein baat kare, toh English mein reply dein. "
+                    "Agar user Hindi ya Hinglish mein baat kare, toh Hindi mein reply dein. "
+                    "Hamesha user ki pasandida bhasha ko priority dein. "
                     f"Pichli baatein: {history_str}"
                 ),
                 tools=[search_tool],
@@ -86,8 +89,13 @@ def ask_agent(request: UserRequest, db: Session = Depends(get_db)):
             )
             
             task = Task(
-                description=f"User question: {request.question}. Use search if needed. Answer in Hindi.",
-                expected_output="Direct Hindi response.",
+                description=(
+                    f"User question: {request.question}. "
+                    "1. Detect the language used by the user. "
+                    "2. Use internet search if real-time facts are needed. "
+                    "3. Provide the final response in the SAME language (English or Hindi)."
+                ),
+                expected_output="Direct response in the user's preferred language.",
                 agent=smart_agent
             )
             
@@ -103,4 +111,4 @@ def ask_agent(request: UserRequest, db: Session = Depends(get_db)):
     return {"answer": answer}
 
 @app.get("/")
-def root(): return {"message": "Quad-Key Groq Agent is Ready!"}
+def root(): return {"message": "Bilingual Quad-Key Agent is Ready!"}
