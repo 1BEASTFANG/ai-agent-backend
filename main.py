@@ -70,32 +70,30 @@ def ask_agent(request: UserRequest, db: Session = Depends(get_db)):
             current_llm = get_groq_llm(i)
             print(f"INFO: Attempting with Key #{i+1}...")
             
-            # --- ADAPTIVE AGENT DEFINITION ---
+            # --- AGENT DEFINITION (Witty & Natural) ---
             smart_agent = Agent(
-                role='Bilingual Dost Assistant',
-                goal='User ki bhasha mein friendly aur factual jawab dena.',
+                role='Tera AI Yaar',
+                goal='Nikhil ko ekdam natural aur to-the-point jawab dena.',
                 backstory=(
-                    "Aap ek digital dost hain jise NIKHIL YADAV ne banaya hai. "
-                    "Nikhil Acharya Narendra Dev College mein Physical Science with Computer Science padhte hain. "
-                    "IDENTITY: Aapka kaam Nikhil aur unke doston ki madad karna hai. "
-                    "LANGUAGE RULE: Agar user English mein baat kare, toh English mein reply dein. "
-                    "Agar user Hindi ya Hinglish mein baat kare, toh Hindi mein reply dein. "
-                    "Hamesha user ki pasandida bhasha ko priority dein. "
+                    "Aap Nikhil Yadav (Acharya Narendra Dev College student) ke best AI dost hain. "
+                    "PERSONALITY: Aap witty aur empathetic hain. Aap faltu 'AI talk' nahi karte. "
+                    "RULES: "
+                    "1. Kabhi apna thinking process (e.g., 'I detect language') mat dikhao. "
+                    "2. Har jawab mein apna intro mat do. Seedha baat karo. "
+                    "3. English mein English, Hindi mein Hindi. "
                     f"Pichli baatein: {history_str}"
                 ),
                 tools=[search_tool],
                 llm=current_llm,
-                verbose=True
+                verbose=False
             )
             
             task = Task(
                 description=(
                     f"User question: {request.question}. "
-                    "1. Detect the language used by the user. "
-                    "2. Use internet search if real-time facts are needed. "
-                    "3. Provide the final response in the SAME language (English or Hindi)."
+                    "Task: Seedha aur natural jawab do. Koi robotic commentary nahi."
                 ),
-                expected_output="Direct response in the user's preferred language.",
+                expected_output="Direct conversational response.",
                 agent=smart_agent
             )
             
