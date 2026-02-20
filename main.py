@@ -69,6 +69,7 @@ def ask_agent(request: UserRequest, db: Session = Depends(get_db)):
     # SYSTEM CURRENT TIME FETCH KAREIN
     current_date = datetime.now().strftime("%Y-%m-%d")
     
+  # YAHAN SE UPDATE KAREIN `ask_agent` ke andar ka loop
     for i in range(4):
         try:
             current_llm = get_groq_llm(i)
@@ -108,15 +109,21 @@ def ask_agent(request: UserRequest, db: Session = Depends(get_db)):
             )
             
             answer = str(Crew(agents=[smart_agent], tasks=[task]).kickoff())
-            break 
+            
+            # Agar hum yahan pohoch gaye, iska matlab jawab mil gaya hai! Loop tod do.
+            if answer and not answer.startswith("Agent stopped"):
+                 break
+                 
         except Exception as e:
-            print(f"WARN: Key #{i+1} failed: {e}")
-            continue
+            # Pura error dikhane ke bajaye, sirf ye bataye ki konsi key limit par aa gayi
+            print(f"WARN: Key #{i+1} failed due to: Rate Limit or Connectivity issue. Shifting to next key.")
+            continue # Agli key try karega
+
+    # Agar 4 keys ke baad bhi kuch na mile, toh friendly message do
+    if not answer or answer == "Maaf kijiye, saari keys abhi busy hain.":
+         answer = "Bhai, abhi system par bohot load hai aur saari API limits khatam ho chuki hain. Thodi der baad try karna!"
 
     new_entry = ChatMessage(user_query=request.question, ai_response=answer)
     db.add(new_entry)
     db.commit()
     return {"answer": answer}
-
-@app.get("/")
-def root(): return {"message": "Bilingual Quad-Key All-Rounder Agent is Ready!"}
