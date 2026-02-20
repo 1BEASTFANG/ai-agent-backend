@@ -7,3 +7,4 @@ litellm
 openai
 groq
 apscheduler  
+email-validator
