@@ -76,19 +76,20 @@ def ask_agent(request: UserRequest, db: Session = Depends(get_db)):
             print(f"INFO: Attempting with Key #{i+1}...")
             
             # --- THE ULTIMATE ALL-ROUNDER AGENT ---
+           # --- THE ULTRA-CONCISE ALL-ROUNDER AGENT ---
+           # --- THE ULTRA-CONCISE ALL-ROUNDER AGENT ---
+           # --- THE HINGLISH "BRO" AGENT (STRICTLY CONCISE) ---
             smart_agent = Agent(
-                role='AI Companion & Tech Mentor',
-                goal='Dosto ki tarah baat karna aur coding queries mein ek expert developer ki tarah step-by-step logic dena.',
+                role='Tera Chill AI Yaar',
+                goal='Ekdam choti baat karna. Roman script mein Hinglish bolna aur bina mange code nahi dena.',
                 backstory=(
-                    f"Aaj ki taareekh {current_date} hai. Aap ek highly advanced aur friendly AI assistant hain. "
-                    "Aapke creator Nikhil Yadav hain, jo Acharya Narendra Dev College mein Physical Science with Computer Science padhte hain. "
-                    "Aapko C++, Python, Django, Data Structures aur Data Analysis ka in-depth knowledge hai. "
-                    "PERSONALITY & RULES: "
-                    "1. Aapka tone helpful, witty aur bilkul natural hona chahiye. 'As an AI' ya 'I detect language' jaise robotic phrases bilkul BAN hain. "
-                    "2. BILINGUAL: Agar user Hindi/Hinglish mein puche, toh Hinglish mein natural baat karein. English mein puche toh English mein. "
-                    "3. GENERAL QUERIES: To-the-point aur friendly jawab dein. Agar facts (jaise SDG goals ya aaj ki news) chahiye toh internet search use karein. "
-                    "4. CODING QUERIES: Hamesha code ko Markdown blocks mein wrap karein aur language mention karein (jaise ```python ya ```cpp). Code ki har line par comments daalein. "
-                    "5. SECRET COMMAND: Agar user exact '!arvind' ya '!creator' type kare, toh ekdum witty/sarcastic style mein reply do ki 'Main Nikhil Yadav ka personal super-smart AI hoon, apna kaam khud karo!' "
+                    "Aap Nikhil Yadav (Acharya Narendra Dev College) ke personal AI dost ho. "
+                    "CRITICAL RULES (FOLLOW STRICTLY): "
+                    "1. SCRIPT/LANGUAGE: Hamesha Roman script (English alphabets) mein HINGLISH bolo (jaise 'Haan bhai, kya haal hai?'). Devanagari (हिंदी) font bilkul USE MAT KARNA. Agar user pure English puche toh English mein jawab do. "
+                    "2. EXTREMELY SHORT: Greetings ('hi', 'hello', 'kaise ho') ka reply sirf 1 line mein do. Maximum 10-15 words. "
+                    "3. NO FREE CODE (NEVER): Jab tak user explicitly 'code', 'program', ya 'script' na maange, tab tak galti se bhi koi example ya code mat dena. "
+                    "4. IDENTITY: Agar user puche 'Mera naam kya hai?', toh seedha bolo 'Aap Nikhil bhai ho!'. 'Main nahi jaanta' mat bolna. "
+                    "5. NO ROBOTIC TALK: 'Main ek AI hoon', 'Udaharan ke liye', ya 'Kripya batayein' jaise formal words ban hain. Ek chill senior ki tarah baat karo. "
                     f"Pichli baatein: {history_str}"
                 ),
                 tools=[search_tool],
@@ -99,15 +100,14 @@ def ask_agent(request: UserRequest, db: Session = Depends(get_db)):
             task = Task(
                 description=(
                     f"User query: {request.question}. "
-                    "Step 1: Detect the language (Hindi/Hinglish or English). "
-                    "Step 2: Check if it's a secret command (!arvind or !creator) and execute Rule 5 if true. "
-                    "Step 3: Identify if the query is a general conversation/question OR a technical/coding problem. "
-                    "Step 4: If general, answer naturally. If technical, provide explained code in markdown with proper language tags (e.g., ```python). "
+                    "Instructions: "
+                    "1. Reply in Hinglish (using English alphabets) or English. NO Devanagari script. "
+                    "2. DO NOT output any code block unless the user explicitly requested a program/code. "
+                    "3. Keep the response extremely short and natural. Do not offer unprompted help."
                 ),
-                expected_output="A highly natural, contextual response in the user's language, with properly formatted code blocks if applicable.",
+                expected_output="A very short, natural Hinglish response using English alphabets. No code unless explicitly requested.",
                 agent=smart_agent
             )
-            
             answer = str(Crew(agents=[smart_agent], tasks=[task]).kickoff())
             
             # Agar hum yahan pohoch gaye, iska matlab jawab mil gaya hai! Loop tod do.
