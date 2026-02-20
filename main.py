@@ -42,14 +42,13 @@ class MySearchTool(BaseTool):
 
 search_tool = MySearchTool()
 
-# --- KEY ROTATION LOGIC (Scaling up to 50 Keys) ---
+# --- KEY ROTATION LOGIC ---
 def get_groq_llm(key_index):
     keys = [os.getenv(f"GROQ_API_KEY_{i}", "").strip() for i in range(1, 51)]
     valid_keys = [k for k in keys if k]
     if not valid_keys:
         raise ValueError("Render par API Keys missing hain!")
     selected_key = valid_keys[key_index % len(valid_keys)]
-    # 🔥 Token Saver Model (8B Instant)
     return LLM(model="groq/llama-3.1-8b-instant", api_key=selected_key)
 
 def get_total_valid_keys():
@@ -61,9 +60,13 @@ class UserRequest(BaseModel):
 
 @app.post("/ask")
 def ask_agent(request: UserRequest, db: Session = Depends(get_db)):
-    # Memory limit 5 for token optimization
-    past_messages = db.query(ChatMessage).order_by(ChatMessage.id.desc()).limit(5).all()
-    history_str = "".join([f"User: {m.user_query}\nAgent: {m.ai_response}\n" for m in reversed(past_messages)])
+    past_messages = db.query(ChatMessage).order_by(ChatMessage.id.desc()).limit(4).all()
+    
+    # 🧠 SMART HISTORY CLEANUP: Purane [Key: X] tags ko agent ki memory se hatana
+    history_str = ""
+    for m in reversed(past_messages):
+        clean_response = m.ai_response.split("\n\n[Key:")[0]
+        history_str += f"User: {m.user_query}\nAgent: {clean_response}\n"
 
     answer = "Bhai, saari keys busy hain. Thoda wait kar le."
     current_date = datetime.now().strftime("%Y-%m-%d")
@@ -75,61 +78,45 @@ def ask_agent(request: UserRequest, db: Session = Depends(get_db)):
         try:
             current_llm = get_groq_llm(i)
             
-            # --- THE FULL 25+ RULES CONSTITUTION ---
+            # --- THE 10 SNIPER RULES ---
+            backstory_text = (
+                f"Date: {current_date}. Aap Nikhil Yadav aur Arvind Kumar ke smart AI dost ho. "
+                "TOP 10 SNIPER RULES (FOLLOW STRICTLY): "
+                "1. SCRIPT: Use ONLY Roman Hinglish (e.g., 'kya haal hai'). NEVER use Devanagari Hindi. "
+                "2. CONCISENESS: For greetings or casual chat (hi, hello), reply naturally in just 1 line. "
+                "3. TOOL SECRECY: NEVER output internal code like '-function=internet_search>'. Keep it hidden. "
+                "4. NEWS/FACTS: If asked for news, search the web and give 3-4 crisp bullet points. "
+                "5. CODING: Provide Markdown code ONLY if explicitly asked. Keep comments clear. "
+                "6. NO FLUFF: Never say 'I am an AI' or 'I apologize'. Start directly with the answer. "
+                "7. EXPERT: Maintain high technical accuracy for C++, Python, and Django queries. "
+                "8. CONTEXT AWARE: Read chat history. Do not repeat the same phrases. "
+                "9. MIRRORING: If user is short, be short. If user asks for details, be detailed. "
+                "10. NO KEY TAGS: NEVER type '[Key: X]' yourself. The backend handles it. "
+                f"\n--- Chat History ---\n{history_str}\n-------------------"
+            )
+            
             smart_agent = Agent(
-                role='Pro AI Mentor & Dost',
-                goal='Nikhil ko expert guidance dena aur rules follow karna.',
-                backstory=(
-                    f"""Aaj ki taareekh {current_date} hai. Aap Nikhil Yadav (ANDC student) ke personal AI mentor aur dost ho.
-                    Aapko ye 25+ Rules har haal mein follow karne hain:
-                    1. IDENTITY: Aap Nikhil aur unke dost Arvind Kumar ke assistant ho.
-                    2. NO ROBOTIC TALK: Kabhi mat bolo 'I am an AI' ya 'I can assist you'.
-                    3. SCRIPT: Sirf Roman alphabets use karo. Devanagari font (हिंदी) strictly BAN hai.
-                    4. CONCISENESS: Normal chat (hi, hello) sirf 1-2 line mein rakho.
-                    5. NEWS: Agar news puchi jaye toh search use karo aur points mein detail do.
-                    6. CODING: Sirf mangne par Markdown (```) use karo aur har line par comments do.
-                    7. NO UNPROMPTED CODE: Bina maange koi code example mat thopo.
-                    8. BILINGUAL: Hinglish ya English mein hi natural baat karo.
-                    9. NO APOLOGIES: Faltu mein 'I apologize' ya 'Sorry' mat bolo.
-                    10. WITTY TONE: Thoda humorous aur smart bano, boring nahi.
-                    11. CONTEXT: Pichli baatein (History) padh kar hi agla jawab do.
-                    12. NO FLUFF: Jawab seedha point se shuru karo. No intro in every message.
-                    13. FORMATTING: News ke liye hamesha bullet points use karo.
-                    14. TECHNICAL: C++, Python, Django aur DSA mein hamesha expert raho.
-                    15. SDG GOALS: India ke 17 SDG goals par hamesha updated raho.
-                    16. PERSONALIZATION: Nikhil ko 'Nikhil bhai' ya 'Bhai' keh kar bulao.
-                    17. NO THINKING: User ko 'Searching...' ya internal logs mat dikhao.
-                    18. TRUTH: Agar search mein info na mile, toh sach bolo ki nahi pata.
-                    19. SPEED: Jawab hamesha fast aur optimized hona chahiye.
-                    20. NO REPETITION: Ek hi phrase baar-baar mat do.
-                    21. MIRRORING: User short hai toh short raho, user detailed hai toh detail do.
-                    22. ADAPTIVE: User ke mood के हिसाब से अपना tone badlo.
-                    23. KEY TRACKER: Har jawab ke aakhir mein key number mention karo.
-                    24. NO DEVANAGARI: Agar user Hindi mein likhe, tab bhi Roman Hinglish mein jawab do.
-                    25. PROFESSIONAL: CS student ke standards ke hisaab se accurate logic do.
-                    
-                    --- Chat History (Context) ---
-                    {history_str}
-                    ------------------------------"""
-                ),
+                role='Pro AI Mentor',
+                goal='To answer flawlessly using the 10 Sniper Rules without showing internal tags.',
+                backstory=backstory_text,
                 tools=[search_tool],
                 llm=current_llm,
                 verbose=False
             )
             
-            task = Task(
-                description=(
-                    f"User Query: {request.question}. "
-                    "Action: Analyze the query. If it is news, use search tool. If it is code, use markdown. "
-                    "Apply all 25 rules strictly. No Devanagari."
-                ),
-                expected_output="A perfect Hinglish response following all 25 constitution rules.",
-                agent=smart_agent
-            )
+            task_desc = f"User: {request.question}. Apply the 10 Sniper Rules. Do NOT leak tool tags."
+            task = Task(description=task_desc, expected_output="Clean Hinglish response.", agent=smart_agent)
             
             raw_answer = str(Crew(agents=[smart_agent], tasks=[task]).kickoff())
+            
+            # 🧮 TOKEN ESTIMATOR & CLEANUP
             if raw_answer and not raw_answer.startswith("Agent stopped"):
-                 answer = f"{raw_answer}\n\n[Key: {i+1}]"
+                 raw_answer = raw_answer.replace("-function=internet_search>", "").strip()
+                 
+                 total_chars = len(backstory_text) + len(task_desc) + len(raw_answer)
+                 approx_tokens = int(total_chars / 4) 
+                 
+                 answer = f"{raw_answer}\n\n[Key: {i+1} | Est. Tokens: {approx_tokens}]"
                  break 
         except Exception as e:
             print(f"WARN: Key #{i+1} failed. Error: {e}")
@@ -142,4 +129,4 @@ def ask_agent(request: UserRequest, db: Session = Depends(get_db)):
 
 @app.get("/")
 def root():
-    return {"message": "Bilingual AI (25+ Rules Master Edition) is Live!"}
+    return {"message": "Bilingual AI (Top 10 Sniper Rules Edition) is Live!"}
