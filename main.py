@@ -44,6 +44,105 @@ def get_groq_llm(key_index):
     keys = [os.getenv(f"GROQ_API_KEY_{i}", "").strip() for i in range(1, 51)]
     valid_keys = [k for k in keys if k]
     if not valid_keys:
+        raise ValueError("Render par API Keys missing hain!")
+    selected_key = valid_keys[key_index % len(valid_keys)]
+    return LLM(model="groq/llama-3.1-8b-instant", api_key=selected_key)
+
+def get_total_valid_keys():
+    keys = [os.getenv(f"GROQ_API_KEY_{i}", "").strip() for i in range(1, 51)]
+    return len([k for k in keys if k])
+
+class UserRequest(BaseModel):
+    question: str
+
+@app.post("/ask")
+def ask_agent(request: UserRequest, db: Session = Depends(get_db)):
+    past_messages = db.query(ChatMessage).order_by(ChatMessage.id.desc()).limit(5).all()
+    history_str = "".join([f"User: {m.user_query}\nAgent: {m.ai_response}\n" for m in reversed(past_messages)])
+
+    answer = "Bhai, saari keys ki limit khatam hai. Thoda wait kar le."
+    current_date = datetime.now().strftime("%Y-%m-%d")
+    
+    total_keys = get_total_valid_keys()
+    loop_count = total_keys if total_keys > 0 else 1 
+
+    for i in range(loop_count):
+        try:
+            current_llm = get_groq_llm(i)
+            
+            # --- THE 25+ RULES CONSTITUTION ---
+            smart_agent = Agent(
+                role='Pro AI Mentor & Dost',
+                goal='Nikhil ko expert guidance dena aur natural conversation karna.',
+                backstory=(
+                    f"Aaj {current_date} hai. Aap Nikhil Yadav (ANDC student) ke personal AI mentor ho. "
+                    "Aapko niche diye gaye 25+ Rules har haal mein follow karne hain: \n"
+                    "1. IDENTITY: Aap Nikhil aur unke dost Arvind Kumar ke personal assistant ho.\n"
+                    "2. NO ROBOTIC TALK: Kabhi mat bolo 'I am an AI' ya 'How can I assist you'.\n"
+                    "3. SCRIPT: Sirf Roman alphabets use karo. Devanagari font (हिंदी) strictly BAN hai.\n"
+                    "4. CONCISENESS: Normal chat 1-2 line mein rakho.\n"
+                    "5. NEWS: Agar news puchi jaye toh search use karo aur points mein brief detail do.\n"
+                    "6. CODING: Sirf mangne par Markdown (```) use karo. Har line par // ya # comments MANDATORY hain.\n"
+                    "7. NO UNPROMPTED CODE: Bina maange coding example mat do.\n"
+                    "8. BILINGUAL: Hinglish ya English mein hi baat karo.\n"
+                    "9. NO APOLOGIES: Faltu mein 'I apologize' ya 'Sorry' mat bolo unless major mistake ho.\n"
+                    "10. WITTY TONE: Thoda humorous aur smart bano, boring nahi.\n"
+                    "11. CONTEXT: Pichli baatein (History) padh kar hi agla jawab do.\n"
+                    "12. NO FLUFF: Jawab seedha point se shuru karo. No intro/outro.\n"
+                    "13. FORMATTING: News ke liye bullet points use karo.\n"
+                    "14. TECHNICAL: C++, Python, Django aur DSA (Music player logic) mein expert raho.\n"
+                    "15. SDG GOALS: India ke 17 SDG goals par updated raho.\n"
+                    "16. PERSONALIZATION: Nikhil ko 'Nikhil bhai' ya 'Bhai' keh kar sambodhit kar sakte ho.\n"
+                    "17. NO THINKING PROCESS: User ko apna internal thought process (e.g. 'Searching the web...') mat dikhao.\n"
+                    "18. TRUTH: Agar search mein info na mile, toh guess mat karo. Sach bata do.\n"
+                    "19. SPEED: Jawab hamesha fast aur optimized hona chahiye.\n"
+                    "20. NO REPETITION: Ek hi baat har message mein repeat mat karo.\n"
+                    "21. SUGGESTIONS: Agar koi topic complex ho, toh aakhir mein 1 chota suggestion de sakte ho.\n"
+                    "22. ADAPTIVE: User gusse mein hai toh calm raho, user excited hai toh energetic.\n"
+                    "23. CLEARITY: Complex topics ko 10-year-old bache ki tarah samjhao.\n"
+                    "24. SAFETY: Kisi bhi illegal activity mein help mat karo.\n"
+                    "25. KEY TRANSPARENCY: Apne jawab ke aakhir mein key number mention karna mandatory hai.\n"
+                    f"\n--- History ---\n{history_str}\n-------------------"
+                ),
+                tools=[search_tool],
+                llm=current_llm,
+                verbose=False
+            )
+            
+            task = Task(
+                description=(
+                    f"User Query: {request.question}. "
+                    "Task: Detect if it's general chat, news, or code. Apply the 25 Rules accordingly."
+                ),
+                expected_output="A perfectly formatted, natural response following all 25 rules.",
+                agent=smart_agent
+            )
+            
+            raw_answer = str(Crew(agents=[smart_agent], tasks=[task]).kickoff())
+            if raw_answer and not raw_answer.startswith("Agent stopped"):
+                 answer = f"{raw_answer}\n\n[Key: {i+1}]"
+                 break 
+        except Exception as e:
+            print(f"WARN: Key #{i+1} failed. Error: {e}")
+            continue
+
+    new_entry = ChatMessage(user_query=request.question, ai_response=answer)
+    db.add(new_entry)
+    db.commit()
+    return {"answer": answer}
+
+@app.get("/")
+def root(): return {"message": "Bilingual AI (25+ Rules Master Edition) Ready!"}
+    description: str = "Use this for real-time factual info from the web."
+    def _run(self, query: str) -> str:
+        return SerperDevTool().run(search_query=str(query))
+
+search_tool = MySearchTool()
+
+def get_groq_llm(key_index):
+    keys = [os.getenv(f"GROQ_API_KEY_{i}", "").strip() for i in range(1, 51)]
+    valid_keys = [k for k in keys if k]
+    if not valid_keys:
         raise ValueError("Render par koi bhi Groq API Key nahi milti!")
     
     selected_key = valid_keys[key_index % len(valid_keys)]
