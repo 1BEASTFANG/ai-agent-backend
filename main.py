@@ -40,7 +40,12 @@ class MySearchTool(BaseTool):
         return SerperDevTool().run(search_query=str(query))
 
 search_tool = MySearchTool()
-my_llm = LLM(model="gemini/gemini-1.5-flash", temperature=0.1)
+# OpenRouter ke liye LLM define karna
+my_llm = LLM(
+    model="openrouter/google/gemini-flash-1.5", # Gemini hi chalega par OpenRouter ke raste
+    temperature=0.1,
+    base_url="https://openrouter.ai/api/v1" # Ye line OpenRouter ko point karti hai
+)
 
 class UserRequest(BaseModel):
     question: str
