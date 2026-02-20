@@ -28,6 +28,11 @@ class ChatMessage(Base):
     session_id = Column(String, index=True, default="default_user") # Unique ID for each phone
     user_query = Column(Text)
     ai_response = Column(Text)
+# main.py mein ye line Base.metadata.create_all ke upar daalein
+# Yeh purani table ko uda dega taaki nayi table ban sake
+# Warning: Isse purani sari chat delete ho jayegi
+ChatMessage.__table__.drop(engine, checkfirst=True) 
+
 
 Base.metadata.create_all(bind=engine)
 app = FastAPI()
