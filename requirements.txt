@@ -8,3 +8,5 @@ openai
 groq
 apscheduler  
 email-validator
+google-generativeai
+fastapi-sso
