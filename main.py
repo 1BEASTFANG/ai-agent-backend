@@ -58,24 +58,16 @@ def get_total_valid_keys():
 class UserRequest(BaseModel):
     question: str
 
-# --- 🚀 MEGA TOPIC ROUTER (Highly Expanded) ---
+# --- 🚀 MEGA TOPIC ROUTER ---
 def detect_category(text):
     text = text.lower()
-    
-    # 1. Data Science & Analysis
     data_words = ['data', 'pandas', 'matplotlib', 'seaborn', 'csv', 'dataset', 'plot', 'graph', 'chart', 'analysis', 'clean', 'visual', 'aggregate', 'calldata', 'diamonds', 'movies', 'dataframe', 'numpy']
-    # 2. Core CS, DSA, Graphics & Backend
     coding_words = ['code', 'python', 'c++', 'django', 'error', 'bug', 'script', 'function', 'logic', 'dsa', 'render', 'ubuntu', 'api', 'opengl', 'vulkan', 'imgui', 'linked list', 'doubly linked list', 'node', 'pointer', 'stack', 'queue', 'backend', 'deploy', 'program', 'music player']
-    # 3. College, Academics & Presentations
     college_words = ['college', 'assignment', 'presentation', 'ppt', 'slide', 'sdg', 'sustainable', 'goals', 'physical science', 'physics', 'exam', 'study', 'notes', 'project', 'andc', 'acharya narendra dev']
-    # 4. News & Current Affairs
     news_words = ['news', 'aaj', 'khabar', 'match', 'samachar', 'update', 'latest', 'current affairs', 'duniya', 'world', 'india', 'headline', 'summit', 'event', 'today']
-    # 5. Location, Weather & Geography
     location_words = ['location', 'kaha', 'kahan', 'delhi', 'weather', 'map', 'distance', 'place', 'city', 'country', 'address', 'mausam', 'direction', 'rasta']
-    # 6. Math & Calculations
     math_words = ['math', 'calculate', 'calculation', 'formula', 'solve', 'equation', 'plus', 'minus', 'multiply', 'divide', 'algebra', 'calculus', 'integration', 'derivation', 'matrix', 'maths']
     
-    # Priority matching
     if any(word in text for word in data_words): return 'data_science'
     if any(word in text for word in coding_words): return 'coding'
     if any(word in text for word in college_words): return 'college'
@@ -83,7 +75,17 @@ def detect_category(text):
     if any(word in text for word in location_words): return 'location'
     if any(word in text for word in math_words): return 'math'
     
+    # Agar kuch match nahi hua, toh ye 'general' return karega aur AI khud handle karega
     return 'general'
+
+# --- 🚨 ZERO-TOKEN FRUSTRATION DETECTOR ---
+def is_similar(q1, q2):
+    # Agar 2 sentences mein same words use hue hain, toh True return karega
+    words1 = set(q1.lower().split())
+    words2 = set(q2.lower().split())
+    if not words1 or not words2: return False
+    overlap = len(words1.intersection(words2))
+    return overlap >= 1 # Agar 1 main keyword bhi same hai, toh similar maano
 
 @app.post("/ask")
 def ask_agent(request: UserRequest, db: Session = Depends(get_db)):
@@ -91,18 +93,35 @@ def ask_agent(request: UserRequest, db: Session = Depends(get_db)):
     
     current_category = detect_category(request.question)
     history_str = ""
+    is_forced_override = False
     
+    # 🚨 OVERRIDE PROTOCOL: Check if user is repeating the same thing 3 times
+    if len(past_messages) >= 2:
+        last_q = past_messages[0].user_query
+        second_last_q = past_messages[1].user_query
+        current_q = request.question
+        
+        if is_similar(current_q, last_q) and is_similar(current_q, second_last_q):
+            is_forced_override = True
+            print("🚨 ALERT: User is forcing/repeating. Bypassing Router! AI will handle directly.")
+
     if past_messages:
         last_msg_category = detect_category(past_messages[0].user_query)
         
-        # SMART DROP: Memory cleared if topic changes!
-        if current_category != 'general' and last_msg_category != 'general' and current_category != last_msg_category:
-            print(f"INFO: Topic shift ({last_msg_category} -> {current_category}). Memory flushed to save tokens!")
-            history_str = "[System: Topic changed by user. Previous context cleared for efficiency.]\n"
-        else:
+        if is_forced_override:
+            # Override Mode: Router ko ignore karo, saari memory AI ko do
             for m in reversed(past_messages):
                 clean_response = m.ai_response.split("\n\n[Key:")[0]
                 history_str += f"User: {m.user_query}\nAgent: {clean_response}\n"
+        else:
+            # Normal Mode: SMART DROP
+            if current_category != 'general' and last_msg_category != 'general' and current_category != last_msg_category:
+                print(f"INFO: Topic shift ({last_msg_category} -> {current_category}). Memory flushed to save tokens!")
+                history_str = "[System: Topic changed by user. Previous context cleared for efficiency.]\n"
+            else:
+                for m in reversed(past_messages):
+                    clean_response = m.ai_response.split("\n\n[Key:")[0]
+                    history_str += f"User: {m.user_query}\nAgent: {clean_response}\n"
 
     answer = "Bhai, saari keys busy hain. Thoda wait kar le."
     current_date = datetime.now().strftime("%Y-%m-%d")
@@ -125,7 +144,7 @@ def ask_agent(request: UserRequest, db: Session = Depends(get_db)):
                 "6. NO FLUFF: Never say 'I am an AI' or 'I apologize'. Start directly. "
                 "7. EXPERT: Maintain high accuracy for CS, Math, and Data Science queries. "
                 "8. CONTEXT AWARE: Read chat history. Do not repeat the same phrases. "
-                "9. MIRRORING: If user is short, be short. If user asks details, be detailed. "
+                "9. OVERRIDE AWARENESS: If user repeats a question 3 times, ignore all past formatting rules and answer them directly and clearly based on their core demand. "
                 "10. NO KEY TAGS: NEVER type '[Key: X]' yourself. The backend handles it. "
                 f"\n--- Chat History ---\n{history_str}\n-------------------"
             )
@@ -163,4 +182,4 @@ def ask_agent(request: UserRequest, db: Session = Depends(get_db)):
 
 @app.get("/")
 def root():
-    return {"message": "Bilingual AI (Mega Micro-Router Edition) is Live!"}
+    return {"message": "Bilingual AI (Override Protocol Edition) is Live!"}
