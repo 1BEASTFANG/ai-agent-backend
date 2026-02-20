@@ -9,7 +9,7 @@ from crewai import Agent, Task, Crew, LLM
 from crewai.tools import BaseTool
 from crewai_tools import SerperDevTool
 
-# --- SMART DATABASE SETUP (Anti-Amnesia) ---
+# --- DATABASE SETUP ---
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./chat_history.db")
 if DATABASE_URL.startswith("postgres://"):
     DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
@@ -32,8 +32,83 @@ def get_db():
     try: yield db
     finally: db.close()
 
-# --- SEARCH TOOL SETUP ---
 class MySearchTool(BaseTool):
+    name: str = "internet_search"
+    description: str = "Use this for real-time factual info from the web."
+    def _run(self, query: str) -> str:
+        return SerperDevTool().run(search_query=str(query))
+
+search_tool = MySearchTool()
+
+def get_groq_llm(key_index):
+    keys = [os.getenv(f"GROQ_API_KEY_{i}", "").strip() for i in range(1, 51)]
+    valid_keys = [k for k in keys if k]
+    if not valid_keys:
+        raise ValueError("Render par koi bhi Groq API Key nahi milti!")
+    
+    selected_key = valid_keys[key_index % len(valid_keys)]
+    return LLM(model="groq/llama-3.1-8b-instant", api_key=selected_key)
+
+def get_total_valid_keys():
+    keys = [os.getenv(f"GROQ_API_KEY_{i}", "").strip() for i in range(1, 51)]
+    return len([k for k in keys if k])
+
+class UserRequest(BaseModel):
+    question: str
+
+@app.post("/ask")
+def ask_agent(request: UserRequest, db: Session = Depends(get_db)):
+    past_messages = db.query(ChatMessage).order_by(ChatMessage.id.desc()).limit(5).all()
+    history_str = "".join([f"User: {m.user_query}\nAgent: {m.ai_response}\n" for m in reversed(past_messages)])
+
+    answer = "Maaf kijiye, saari keys abhi busy hain."
+    current_date = datetime.now().strftime("%Y-%m-%d")
+    
+    total_keys = get_total_valid_keys()
+    loop_count = total_keys if total_keys > 0 else 1 
+
+    for i in range(loop_count):
+        try:
+            current_llm = get_groq_llm(i)
+            print(f"INFO: Attempting with Key #{i+1}...")
+            
+            smart_agent = Agent(
+                role='Tera Smart AI Yaar',
+                goal='Nikhil ko chote, natural jawab dena aur sirf mangne par code dena.',
+                backstory=(
+                    f"Aaj {current_date} hai. Aap Nikhil Yadav (ANDC CS student) ke personal AI dost ho. "
+                    "RULES: 1. Language: Roman Hinglish/English (No Devnagari). 2. Concise: Short 1-2 line reply for general talk. "
+                    "3. No code unless asked. 4. Use Chat History for context. "
+                    f"\n--- Chat History ---\n{history_str}\n-------------------"
+                ),
+                tools=[search_tool],
+                llm=current_llm,
+                verbose=False
+            )
+            
+            task = Task(
+                description=f"User query: {request.question}. Reply naturally in Hinglish/English. Be super brief.",
+                expected_output="Short natural response.",
+                agent=smart_agent
+            )
+            
+            raw_answer = str(Crew(agents=[smart_agent], tasks=[task]).kickoff())
+            
+            if raw_answer and not raw_answer.startswith("Agent stopped"):
+                 # ✨ KEY TRACKER: Final response mein key index add kiya
+                 answer = f"{raw_answer}\n\n[Key: {i+1}]"
+                 break 
+        except Exception as e:
+            print(f"WARN: Key #{i+1} failed. Error: {e}")
+            continue
+
+    new_entry = ChatMessage(user_query=request.question, ai_response=answer)
+    db.add(new_entry)
+    db.commit()
+    return {"answer": answer}
+
+@app.get("/")
+def root(): return {"message": "Bilingual Agent with Key Tracker Ready!"}
     name: str = "internet_search"
     description: str = "Use this for real-time factual info from the web."
     def _run(self, query: str) -> str:
