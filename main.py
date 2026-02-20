@@ -171,8 +171,8 @@ def ask_agent(request: UserRequest, db: Session = Depends(get_db)):
                  answer = f"{raw_answer}\n\n[Key: {i+1} | Est. Tokens: {approx_tokens}]"
                  break 
         except Exception as e:
-                 print(f"DEBUG: Error with Key {i+1}: {str(e)}")
-                 continue
+            print(f"DEBUG: Error with Key {i+1}: {str(e)}")
+            continue
             
             
 
