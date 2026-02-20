@@ -33,7 +33,7 @@ class ChatMessage(Base):
 # main.py mein ye line Base.metadata.create_all ke upar daalein
 # Yeh purani table ko uda dega taaki nayi table ban sake
 # Warning: Isse purani sari chat delete ho jayegi
-ChatMessage.__table__.drop(engine, checkfirst=True) 
+
 
 
 Base.metadata.create_all(bind=engine)
