@@ -1,4 +1,5 @@
 import os
+from datetime import datetime
 from fastapi import FastAPI, Depends
 from pydantic import BaseModel
 from sqlalchemy import create_engine, Column, Integer, Text
@@ -65,25 +66,28 @@ def ask_agent(request: UserRequest, db: Session = Depends(get_db)):
 
     answer = "Maaf kijiye, saari keys abhi busy hain."
     
+    # SYSTEM CURRENT TIME FETCH KAREIN
+    current_date = datetime.now().strftime("%Y-%m-%d")
+    
     for i in range(4):
         try:
             current_llm = get_groq_llm(i)
             print(f"INFO: Attempting with Key #{i+1}...")
             
-            # --- AGENT DEFINITION (Witty & Natural) ---
-           # --- THE ULTIMATE CODING & BILINGUAL AGENT ---
-           # --- THE ULTIMATE ALL-ROUNDER AGENT ---
+            # --- THE ULTIMATE ALL-ROUNDER AGENT ---
             smart_agent = Agent(
                 role='AI Companion & Tech Mentor',
                 goal='Dosto ki tarah baat karna aur coding queries mein ek expert developer ki tarah step-by-step logic dena.',
                 backstory=(
-                    "Aap ek highly advanced aur friendly AI assistant hain. Aapke creator Nikhil Yadav hain, jo Acharya Narendra Dev College mein Physical Science with Computer Science padhte hain. "
+                    f"Aaj ki taareekh {current_date} hai. Aap ek highly advanced aur friendly AI assistant hain. "
+                    "Aapke creator Nikhil Yadav hain, jo Acharya Narendra Dev College mein Physical Science with Computer Science padhte hain. "
                     "Aapko C++, Python, Django, Data Structures aur Data Analysis ka in-depth knowledge hai. "
                     "PERSONALITY & RULES: "
                     "1. Aapka tone helpful, witty aur bilkul natural hona chahiye. 'As an AI' ya 'I detect language' jaise robotic phrases bilkul BAN hain. "
                     "2. BILINGUAL: Agar user Hindi/Hinglish mein puche, toh Hinglish mein natural baat karein. English mein puche toh English mein. "
-                    "3. GENERAL QUERIES: To-the-point aur friendly jawab dein. Agar facts (jaise SDG goals) chahiye toh internet search use karein. "
-                    "4. CODING QUERIES: Hamesha code ko Markdown (```) blocks mein wrap karein. Code ki har line par comments daalein aur logic ko aasan bhasha mein samjhayein. "
+                    "3. GENERAL QUERIES: To-the-point aur friendly jawab dein. Agar facts (jaise SDG goals ya aaj ki news) chahiye toh internet search use karein. "
+                    "4. CODING QUERIES: Hamesha code ko Markdown blocks mein wrap karein aur language mention karein (jaise ```python ya ```cpp). Code ki har line par comments daalein. "
+                    "5. SECRET COMMAND: Agar user exact '!arvind' ya '!creator' type kare, toh ekdum witty/sarcastic style mein reply do ki 'Main Nikhil Yadav ka personal super-smart AI hoon, apna kaam khud karo!' "
                     f"Pichli baatein: {history_str}"
                 ),
                 tools=[search_tool],
@@ -95,8 +99,9 @@ def ask_agent(request: UserRequest, db: Session = Depends(get_db)):
                 description=(
                     f"User query: {request.question}. "
                     "Step 1: Detect the language (Hindi/Hinglish or English). "
-                    "Step 2: Identify if the query is a general conversation/question OR a technical/coding problem. "
-                    "Step 3: If general, answer naturally in the detected language. If technical, provide explained code in markdown with comments. "
+                    "Step 2: Check if it's a secret command (!arvind or !creator) and execute Rule 5 if true. "
+                    "Step 3: Identify if the query is a general conversation/question OR a technical/coding problem. "
+                    "Step 4: If general, answer naturally. If technical, provide explained code in markdown with proper language tags (e.g., ```python). "
                 ),
                 expected_output="A highly natural, contextual response in the user's language, with properly formatted code blocks if applicable.",
                 agent=smart_agent
@@ -114,4 +119,4 @@ def ask_agent(request: UserRequest, db: Session = Depends(get_db)):
     return {"answer": answer}
 
 @app.get("/")
-def root(): return {"message": "Bilingual Quad-Key Agent is Ready!"}
+def root(): return {"message": "Bilingual Quad-Key All-Rounder Agent is Ready!"}
