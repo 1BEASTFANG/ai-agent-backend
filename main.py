@@ -33,26 +33,30 @@ class MySearchTool(BaseTool):
     name: str = "internet_search"
     description: str = "Use this for real-time factual info from the web."
     def _run(self, query: str) -> str:
-        # SERPER_API_KEY environment se automatically uthayi jayegi
         return SerperDevTool().run(search_query=str(query))
 
 search_tool = MySearchTool()
 
-# --- GROQ KEY ROTATION ---
-def get_groq_llm(key_index=0):
-    all_keys = [
+# --- 4-KEY GROQ ROTATION LOGIC ---
+def get_groq_llm(key_index):
+    # Render dashboard par ye 4 variables banayein
+    keys = [
         os.getenv("GROQ_API_KEY_1", "").strip(),
         os.getenv("GROQ_API_KEY_2", "").strip(),
-        os.getenv("GROQ_API_KEY_3", "").strip()
+        os.getenv("GROQ_API_KEY_3", "").strip(),
+        os.getenv("GROQ_API_KEY_4", "").strip()
     ]
-    valid_keys = [k for k in all_keys if k]
-    if not valid_keys:
-        raise ValueError("Render par koi Groq Key nahi mili!")
     
-    current_key = valid_keys[key_index % len(valid_keys)]
+    valid_keys = [k for k in keys if k]
+    if not valid_keys:
+        raise ValueError("Render par koi bhi Groq API Key nahi mili!")
+    
+    # Current key pick karein
+    selected_key = valid_keys[key_index % len(valid_keys)]
+    
     return LLM(
-        model="groq/llama-3.3-70b-versatile",
-        api_key=current_key
+        model="groq/llama-3.3-70b-versatile", # Latest stable model
+        api_key=selected_key
     )
 
 class UserRequest(BaseModel):
@@ -63,31 +67,34 @@ def ask_agent(request: UserRequest, db: Session = Depends(get_db)):
     past_messages = db.query(ChatMessage).order_by(ChatMessage.id.desc()).limit(5).all()
     history_str = "".join([f"User: {m.user_query}\nAgent: {m.ai_response}\n" for m in reversed(past_messages)])
 
-    answer = "Maaf kijiye, abhi servers busy hain."
+    answer = "Maaf kijiye, saari keys abhi busy hain."
     
-    # Rotation logic: 3 keys tak try karein
-    for i in range(3):
+    # 4 Keys ke liye 4 baar try karein
+    for i in range(4):
         try:
             current_llm = get_groq_llm(i)
-            print(f"INFO: Trying Key #{i+1}...")
+            print(f"INFO: Attempting with Key #{i+1}...")
             
             smart_agent = Agent(
                 role='Dost Assistant',
-                goal='Search internet for latest facts and answer in Hindi.',
-                backstory=f"Aap ek digital dost hain jo internet use kar sakta hai. History: {history_str}",
-                tools=[search_tool], # Search tool yahan wapas aa gaya
-                llm=current_llm
+                goal='Search internet and give friendly Hindi answers.',
+                backstory=f"Aap ek digital dost hain. History: {history_str}",
+                tools=[search_tool],
+                llm=current_llm,
+                verbose=True
             )
+            
             task = Task(
                 description=f"User query: {request.question}. Use search if needed. Answer in Hindi.",
-                expected_output="Detailed Hindi response.",
+                expected_output="Direct Hindi response.",
                 agent=smart_agent
             )
+            
             answer = str(Crew(agents=[smart_agent], tasks=[task]).kickoff())
-            break 
+            break # Success! Loop se bahar niklein
         except Exception as e:
             print(f"WARN: Key #{i+1} failed: {e}")
-            continue
+            continue # Agli key try karein
 
     new_entry = ChatMessage(user_query=request.question, ai_response=answer)
     db.add(new_entry)
@@ -95,4 +102,4 @@ def ask_agent(request: UserRequest, db: Session = Depends(get_db)):
     return {"answer": answer}
 
 @app.get("/")
-def root(): return {"message": "Groq-Powered Agent with Search is Live!"}
+def root(): return {"message": "Quad-Key Groq Agent is Ready!"}
