@@ -39,23 +39,19 @@ search_tool = MySearchTool()
 
 # --- 4-KEY GROQ ROTATION LOGIC ---
 def get_groq_llm(key_index):
-    # Render dashboard par ye 4 variables banayein
     keys = [
         os.getenv("GROQ_API_KEY_1", "").strip(),
         os.getenv("GROQ_API_KEY_2", "").strip(),
         os.getenv("GROQ_API_KEY_3", "").strip(),
         os.getenv("GROQ_API_KEY_4", "").strip()
     ]
-    
     valid_keys = [k for k in keys if k]
     if not valid_keys:
-        raise ValueError("Render par koi bhi Groq API Key nahi mili!")
+        raise ValueError("Render par koi bhi Groq API Key nahi milti!")
     
-    # Current key pick karein
     selected_key = valid_keys[key_index % len(valid_keys)]
-    
     return LLM(
-        model="groq/llama-3.3-70b-versatile", # Latest stable model
+        model="groq/llama-3.3-70b-versatile",
         api_key=selected_key
     )
 
@@ -69,32 +65,37 @@ def ask_agent(request: UserRequest, db: Session = Depends(get_db)):
 
     answer = "Maaf kijiye, saari keys abhi busy hain."
     
-    # 4 Keys ke liye 4 baar try karein
     for i in range(4):
         try:
             current_llm = get_groq_llm(i)
             print(f"INFO: Attempting with Key #{i+1}...")
             
+            # --- AGENT DEFINITION (Correct Indentation) ---
             smart_agent = Agent(
                 role='Dost Assistant',
-                goal='Search internet and give friendly Hindi answers.',
-                backstory=f"Aap ek digital dost hain. History: {history_str}",
+                goal='Nikhil Yadav ki madad karna aur friendly Hindi answers dena.',
+                backstory=(
+                    "Aap ek digital dost hain jise NIKHIL YADAV ne banaya hai. "
+                    "Nikhil Acharya Narendra Dev College mein Physical Science with Computer Science padhte hain. "
+                    "Aapka kaam unke Nikhil aur unke friends ki madat karna hai aap mujhse kuch bhi puch sakte hai  "
+                    f"Pichli baatein: {history_str}"
+                ),
                 tools=[search_tool],
                 llm=current_llm,
                 verbose=True
             )
             
             task = Task(
-                description=f"User query: {request.question}. Use search if needed. Answer in Hindi.",
+                description=f"User question: {request.question}. Use search if needed. Answer in Hindi.",
                 expected_output="Direct Hindi response.",
                 agent=smart_agent
             )
             
             answer = str(Crew(agents=[smart_agent], tasks=[task]).kickoff())
-            break # Success! Loop se bahar niklein
+            break 
         except Exception as e:
             print(f"WARN: Key #{i+1} failed: {e}")
-            continue # Agli key try karein
+            continue
 
     new_entry = ChatMessage(user_query=request.question, ai_response=answer)
     db.add(new_entry)
