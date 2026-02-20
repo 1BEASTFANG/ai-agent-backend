@@ -58,33 +58,41 @@ def get_total_valid_keys():
 class UserRequest(BaseModel):
     question: str
 
-# --- ZERO-TOKEN TOPIC ROUTER ---
+# --- 🚀 SUPERCHARGED TOPIC ROUTER (English + Hinglish) ---
 def detect_category(text):
     text = text.lower()
-    coding_words = ['code', 'python', 'c++', 'django', 'error', 'bug', 'script', 'function', 'logic', 'dsa']
-    news_words = ['news', 'aaj', 'khabar', 'match', 'samachar', 'update', 'latest', 'aaj ki']
     
+    # 1. Data Science & Analysis
+    data_words = ['data', 'pandas', 'matplotlib', 'seaborn', 'csv', 'dataset', 'plot', 'graph', 'chart', 'analysis', 'clean', 'visual', 'aggregate', 'calldata', 'diamonds', 'movies']
+    # 2. Core CS, DSA & Backend
+    coding_words = ['code', 'python', 'c++', 'django', 'error', 'bug', 'script', 'function', 'logic', 'dsa', 'render', 'ubuntu', 'api', 'opengl', 'vulkan', 'imgui', 'linked list', 'stack', 'queue', 'backend', 'deploy', 'program']
+    # 3. College, Academics & Presentations
+    college_words = ['college', 'assignment', 'presentation', 'ppt', 'slide', 'sdg', 'sustainable', 'goals', 'physical science', 'physics', 'exam', 'study', 'notes', 'project']
+    # 4. News & General Info
+    news_words = ['news', 'aaj', 'khabar', 'match', 'samachar', 'update', 'latest', 'aaj ki', 'current affairs', 'duniya', 'world', 'india']
+    
+    if any(word in text for word in data_words): return 'data_science'
     if any(word in text for word in coding_words): return 'coding'
+    if any(word in text for word in college_words): return 'college'
     if any(word in text for word in news_words): return 'news'
+    
     return 'general'
 
 @app.post("/ask")
 def ask_agent(request: UserRequest, db: Session = Depends(get_db)):
     past_messages = db.query(ChatMessage).order_by(ChatMessage.id.desc()).limit(4).all()
     
-    # 🧠 SMART TOPIC SWITCHER (Aapka custom logic)
     current_category = detect_category(request.question)
     history_str = ""
     
     if past_messages:
         last_msg_category = detect_category(past_messages[0].user_query)
         
-        # Agar topic change hua, toh history DROP kar do
+        # Smart Drop: Agar user Data Science se achanak News par shift ho, toh memory clear!
         if current_category != 'general' and last_msg_category != 'general' and current_category != last_msg_category:
-            print(f"INFO: Topic switched from {last_msg_category} to {current_category}. Dropping memory!")
-            history_str = "[System: User switched topic. Old memory cleared to save tokens.]\n"
+            print(f"INFO: Context shift detected ({last_msg_category} -> {current_category}). Memory flushed to save tokens!")
+            history_str = "[System: Topic changed by user. Previous context cleared for efficiency.]\n"
         else:
-            # Topic same hai toh normal history bhejo (cleaning old keys)
             for m in reversed(past_messages):
                 clean_response = m.ai_response.split("\n\n[Key:")[0]
                 history_str += f"User: {m.user_query}\nAgent: {clean_response}\n"
@@ -99,7 +107,6 @@ def ask_agent(request: UserRequest, db: Session = Depends(get_db)):
         try:
             current_llm = get_groq_llm(i)
             
-            # --- THE 10 SNIPER RULES ---
             backstory_text = (
                 f"Date: {current_date}. Aap Nikhil Yadav aur Arvind Kumar ke smart AI dost ho. "
                 "TOP 10 SNIPER RULES (FOLLOW STRICTLY): "
@@ -109,7 +116,7 @@ def ask_agent(request: UserRequest, db: Session = Depends(get_db)):
                 "4. NEWS/FACTS: If asked for news, search the web and give 3-4 crisp bullet points. "
                 "5. CODING: Provide Markdown code ONLY if explicitly asked. Keep comments clear. "
                 "6. NO FLUFF: Never say 'I am an AI' or 'I apologize'. Start directly with the answer. "
-                "7. EXPERT: Maintain high technical accuracy for C++, Python, and Django queries. "
+                "7. EXPERT: Maintain high technical accuracy for C++, Python, Django, and Data Science queries. "
                 "8. CONTEXT AWARE: Read chat history. Do not repeat the same phrases. "
                 "9. MIRRORING: If user is short, be short. If user asks for details, be detailed. "
                 "10. NO KEY TAGS: NEVER type '[Key: X]' yourself. The backend handles it. "
@@ -130,7 +137,6 @@ def ask_agent(request: UserRequest, db: Session = Depends(get_db)):
             
             raw_answer = str(Crew(agents=[smart_agent], tasks=[task]).kickoff())
             
-            # 🧮 TOKEN ESTIMATOR & CLEANUP
             if raw_answer and not raw_answer.startswith("Agent stopped"):
                  raw_answer = raw_answer.replace("-function=internet_search>", "").strip()
                  
@@ -150,4 +156,4 @@ def ask_agent(request: UserRequest, db: Session = Depends(get_db)):
 
 @app.get("/")
 def root():
-    return {"message": "Bilingual AI (Smart Router Edition) is Live!"}
+    return {"message": "Bilingual AI (Supercharged Micro-Router Edition) is Live!"}
