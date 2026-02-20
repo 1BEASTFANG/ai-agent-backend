@@ -3,9 +3,4 @@ uvicorn
 sqlalchemy
 crewai==1.9.3
 crewai-tools==1.9.3
-litellm
-openai
 groq
-apscheduler
-email-validator
-google-generativeai
