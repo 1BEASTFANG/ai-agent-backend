@@ -8,4 +8,4 @@ openai
 groq
 apscheduler
 email-validator
-google-generativeai  <-- Yeh zaroori hai Layer 3 ke liye
+google-generativeai  
