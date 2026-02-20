@@ -13,7 +13,9 @@ from sklearn.naive_bayes import MultinomialNB
 from sklearn.pipeline import make_pipeline
 
 # --- DATABASE SETUP ---
-DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./chat_history.db")
+# Purani line: "sqlite:///./chat_history_v2.db"
+# Nayi line (v3 kar dein):
+DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./chat_history_v3.db")
 if DATABASE_URL.startswith("postgres://"):
     DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
 
