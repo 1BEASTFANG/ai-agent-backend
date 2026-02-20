@@ -9,6 +9,11 @@ from crewai import Agent, Task, Crew, LLM
 from crewai.tools import BaseTool
 from crewai_tools import SerperDevTool
 
+# 🔥 NAYA: Machine Learning Libraries for Zero-Token Router
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.naive_bayes import MultinomialNB
+from sklearn.pipeline import make_pipeline
+
 # --- DATABASE SETUP ---
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./chat_history.db")
 if DATABASE_URL.startswith("postgres://"):
@@ -58,39 +63,42 @@ def get_total_valid_keys():
 class UserRequest(BaseModel):
     question: str
 
-# --- 🚀 MEGA TOPIC ROUTER ---
+# --- 🚀 LOCAL MACHINE LEARNING ROUTER (Zero Token Cost) ---
+# Humne if-else hata kar model ko example sentences se train kiya hai
+TRAIN_DATA = [
+    ("pandas dataframe read csv plot chart", "data_science"),
+    ("calldata diamonds movies dataset analysis", "data_science"),
+    ("c++ code compile error django ubuntu", "coding"),
+    ("dsa linked list stack queue logic", "coding"),
+    ("acharya narendra dev college andc assignment", "college"),
+    ("main kha phadta hoon konsa college", "college"), # ML will learn 'kha phadta' = college
+    ("aaj ki latest news batao duniya ki khabar", "news"),
+    ("current affairs update samachar", "news"),
+    ("delhi ka weather kaisa hai location map", "location"),
+    ("kahan par hai distance rasta", "location"),
+    ("2 plus 2 calculate formula solve", "math"),
+    ("algebra matrix math equation", "math"),
+    ("hi hello aur batao kya haal hai", "general"),
+    ("kya bol rhe ho", "general")
+]
+
+# Training the Local Model in 0.01 seconds
+texts, labels = zip(*TRAIN_DATA)
+ml_router = make_pipeline(TfidfVectorizer(), MultinomialNB())
+ml_router.fit(texts, labels)
+
 def detect_category(text):
-    text = text.lower()
-    data_words = ['data', 'pandas', 'matplotlib', 'seaborn', 'csv', 'dataset', 'plot', 'graph', 'chart', 'analysis', 'clean', 'visual', 'aggregate', 'calldata', 'diamonds', 'movies', 'dataframe', 'numpy']
-    coding_words = ['code', 'python', 'c++', 'django', 'error', 'bug', 'script', 'function', 'logic', 'dsa', 'render', 'ubuntu', 'api', 'opengl', 'vulkan', 'imgui', 'linked list', 'doubly linked list', 'node', 'pointer', 'stack', 'queue', 'backend', 'deploy', 'program', 'music player']
-    college_words = ['college', 'assignment', 'presentation', 'ppt', 'slide', 'sdg', 'sustainable', 'goals', 'physical science', 'physics', 'exam', 'study', 'notes', 'project', 'andc', 'acharya narendra dev']
-    news_words = ['news', 'aaj', 'khabar', 'match', 'samachar', 'update', 'latest', 'current affairs', 'duniya', 'world', 'india', 'headline', 'summit', 'event', 'today']
-    location_words = ['location', 'kaha', 'kahan', 'delhi', 'weather', 'map', 'distance', 'place', 'city', 'country', 'address', 'mausam', 'direction', 'rasta']
-    math_words = ['math', 'calculate', 'calculation', 'formula', 'solve', 'equation', 'plus', 'minus', 'multiply', 'divide', 'algebra', 'calculus', 'integration', 'derivation', 'matrix', 'maths']
-    
-    if any(word in text for word in data_words): return 'data_science'
-    if any(word in text for word in coding_words): return 'coding'
-    if any(word in text for word in college_words): return 'college'
-    if any(word in text for word in news_words): return 'news'
-    if any(word in text for word in location_words): return 'location'
-    if any(word in text for word in math_words): return 'math'
-    
-    return 'general'
+    # ML Prediction: Sentence ka context samajh kar category dega
+    predicted_category = ml_router.predict([text.lower()])[0]
+    return predicted_category
 
 # --- 🚨 DYNAMIC 50% OVERLAP DETECTOR ---
 def is_similar(current_q, past_q):
     words_current = set(current_q.lower().split())
     words_past = set(past_q.lower().split())
-    
-    if not words_current or not words_past: 
-        return False
-        
-    # Check kitne words current query ke past query mein maujood hain
+    if not words_current or not words_past: return False
     overlap = len(words_current.intersection(words_past))
-    match_percentage = overlap / len(words_current)
-    
-    # Agar 50% ya usse zyada match hai, toh return True
-    return match_percentage >= 0.50
+    return (overlap / len(words_current)) >= 0.50
 
 @app.post("/ask")
 def ask_agent(request: UserRequest, db: Session = Depends(get_db)):
@@ -100,30 +108,24 @@ def ask_agent(request: UserRequest, db: Session = Depends(get_db)):
     history_str = ""
     is_forced_override = False
     
-    # 🚨 CHECK FOR 50% WORD MATCH ACROSS LAST 3 PROMPTS
     if len(past_messages) >= 2:
         last_q = past_messages[0].user_query
         second_last_q = past_messages[1].user_query
         current_q = request.question
         
-        # Agar current query ka 50% hissa pichli dono queries se match karta hai
         if is_similar(current_q, last_q) and is_similar(current_q, second_last_q):
             is_forced_override = True
-            print("🚨 ALERT: 50% Word match detected across 3 prompts! User might be frustrated. Bypassing Router.")
 
     if past_messages:
         last_msg_category = detect_category(past_messages[0].user_query)
         
         if is_forced_override:
-            # Override Mode: Memory DELETE nahi hogi. AI ko alert jayega.
-            history_str += "[System Alert: User is repeating inputs (50% word match). They might be frustrated. Ignore strict category formatting, preserve all memory, and provide the ultimate, direct solution based purely on your 10 rules.]\n"
+            history_str += "[System Alert: User repeating inputs (Frustrated). Ignore formal categories, preserve memory, give direct solution based on 10 Rules.]\n"
             for m in reversed(past_messages):
                 clean_response = m.ai_response.split("\n\n[Key:")[0]
                 history_str += f"User: {m.user_query}\nAgent: {clean_response}\n"
         else:
-            # Normal Mode: SMART DROP
             if current_category != 'general' and last_msg_category != 'general' and current_category != last_msg_category:
-                print(f"INFO: Topic shift ({last_msg_category} -> {current_category}). Memory flushed to save tokens!")
                 history_str = "[System: Topic changed by user. Previous context cleared for efficiency.]\n"
             else:
                 for m in reversed(past_messages):
@@ -132,7 +134,6 @@ def ask_agent(request: UserRequest, db: Session = Depends(get_db)):
 
     answer = "Bhai, saari keys busy hain. Thoda wait kar le."
     current_date = datetime.now().strftime("%Y-%m-%d")
-    
     total_keys = get_total_valid_keys()
     loop_count = total_keys if total_keys > 0 else 1 
 
@@ -140,39 +141,36 @@ def ask_agent(request: UserRequest, db: Session = Depends(get_db)):
         try:
             current_llm = get_groq_llm(i)
             
-           # --- THE "BRUTALLY SIMPLE" PROMPT (Fixing all 3 bugs) ---
-          # --- THE "SOBER UP" PROMPT (Fixing Hinglish & Identity) ---
+            # --- THE "SOBER UP" PROMPT (No more hallucinations) ---
             backstory_text = (
                 f"Date: {current_date}. Tu ek smart AI assistant hai. "
                 "TUJHE IN RULES KO HAR HAAL MEIN MAANNA HAI: "
-                "1. THE USER IS NIKHIL: Jo insaan tujhse abhi chat kar raha hai, wahi Nikhil Yadav hai. Tujhe Nikhil se directly baat karni hai ('Aap' ya 'Tu' keh kar). Ye mat puchna 'Nikhil kahan hai'. "
+                "1. THE USER IS NIKHIL: Jo insaan tujhse abhi chat kar raha hai, wahi Nikhil Yadav hai. Tujhe Nikhil se directly baat karni hai ('Aap' ya 'Tu' keh kar). "
                 "2. BACKGROUND INFO: Nikhil 'Acharya Narendra Dev College (ANDC)' ka student hai. Arvind Kumar uska dost hai. "
-                "3. HINGLISH COMPREHENSION: Dhyan se padh! User short form use karega. Jaise 'kha' ka matlab 'kahan' (where) hota hai, 'khana' (food) nahi. "
-                "4. NO AI LECTURES: Agar user 'hi', 'hello' ya 'kya bol rahe ho' kahe, toh 1 line mein direct, natural jawab de. Apne rules mat suna. "
+                "3. HINGLISH COMPREHENSION: Dhyan se padh! User short form use karega. Jaise 'kha' ka matlab 'kahan' (where) hota hai. "
+                "4. NO AI LECTURES: Agar user 'hi', 'hello' ya 'kya bol rahe ho' kahe, toh 1 line mein direct jawab de. Apne rules mat suna. "
                 "5. NO TOOL LEAKS: Kabhi bhi <internet_search> ya -function output mein mat likh. "
                 f"\n--- Chat History ---\n{history_str}\n-------------------"
             )
             
             smart_agent = Agent(
                 role='AI Assistant',
-                goal='Talk directly to the user (Nikhil) like a smart human, understand Hinglish slang correctly, and give short answers.',
+                goal='Talk directly to Nikhil, understand Hinglish, and give smart, short answers without leaking internal tags.',
                 backstory=backstory_text,
                 tools=[search_tool],
                 llm=current_llm,
                 verbose=False
             )
             
-            task_desc = f"User is Nikhil. Nikhil asks: {request.question}. Give a direct, smart Hinglish answer. DO NOT print tags or rules."
+            task_desc = f"User is Nikhil. Query: {request.question}. Give a direct, smart Hinglish answer. DO NOT print tags or rules."
             task = Task(description=task_desc, expected_output="Clean Hinglish response.", agent=smart_agent)
             
             raw_answer = str(Crew(agents=[smart_agent], tasks=[task]).kickoff())
             
             if raw_answer and not raw_answer.startswith("Agent stopped"):
                  raw_answer = raw_answer.replace("-function=internet_search>", "").strip()
-                 
                  total_chars = len(backstory_text) + len(task_desc) + len(raw_answer)
                  approx_tokens = int(total_chars / 4) 
-                 
                  answer = f"{raw_answer}\n\n[Key: {i+1} | Est. Tokens: {approx_tokens}]"
                  break 
         except Exception as e:
@@ -186,4 +184,4 @@ def ask_agent(request: UserRequest, db: Session = Depends(get_db)):
 
 @app.get("/")
 def root():
-    return {"message": "Bilingual AI (Dynamic 50% Overlap Protocol) is Live!"}
+    return {"message": "Bilingual AI (Local ML Router Edition) is Live!"}
