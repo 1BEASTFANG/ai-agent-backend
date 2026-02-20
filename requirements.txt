@@ -8,4 +8,4 @@ openai
 groq
 apscheduler
 email-validator
-google-generativeai  
+google-generativeai
