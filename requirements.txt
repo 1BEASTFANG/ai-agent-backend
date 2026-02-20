@@ -6,4 +6,4 @@ crewai-tools==1.9.3
 litellm
 openai
 groq
-google-generativeai
+apscheduler  
