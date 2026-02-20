@@ -165,7 +165,9 @@ def ask_agent(request: UserRequest, db: Session = Depends(get_db)):
                  answer = f"{raw_answer}\n\n[Key: {i+1} | Est. Tokens: {approx_tokens}]"
                  break 
         except Exception as e:
-            continue
+            # 🚀 YE WALI LINE YAHAN DAALNI HAI
+                 print(f"DEBUG: Error with Key {i+1}: {str(e)}")
+                 continue
 
     # 🚀 NAYA UPDATE: Naya message save karte waqt session_id bhi save hoga
     new_entry = ChatMessage(session_id=request.session_id, user_query=request.question, ai_response=answer)
