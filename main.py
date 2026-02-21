@@ -58,12 +58,11 @@ def get_groq_llm(key_index):
     valid_keys = [k for k in keys if k]
     if not valid_keys: raise ValueError("Render par API Keys missing hain!")
     
-    # 🚀 NAYA TARIKA: provider aur base_url specify karne se LiteLLM confuse nahi hoga
     return LLM(
-        model="groq/llama3-8b-8192", # 🚀 'llama-3' ki jagah 'llama3' kijiye
+        model="groq/llama-3.1-8b-instant", # 🚀 Naya aur stable model
         api_key=valid_keys[key_index % len(valid_keys)],
         base_url="https://api.groq.com/openai/v1"
-    )
+     )
 def get_total_valid_keys():
     keys = [os.getenv(f"GROQ_API_KEY_{i}", "").strip() for i in range(1, 51)]
     return len([k for k in keys if k])
