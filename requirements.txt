@@ -13,3 +13,5 @@ litellm
 crewai[tools]
 apscheduler
 email-validator
+fastapi_sso
+python-multipart
