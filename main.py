@@ -1,19 +1,24 @@
 import os
-import re  # 🚀 Regex cleaning ke liye zaroori hai
+import re
 from datetime import datetime
 from fastapi import FastAPI, Depends
 from pydantic import BaseModel
 from sqlalchemy import create_engine, Column, Integer, Text, String
-from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, Session
+from sqlalchemy.ext.declarative import declarative_base
 from crewai import Agent, Task, Crew, LLM
 from crewai.tools import BaseTool
 from crewai_tools import SerperDevTool
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.naive_bayes import MultinomialNB
 from sklearn.pipeline import make_pipeline
-# Baaki saare imports ke theek niche isey lagayein:
-from training_data import TRAIN_DATA
+
+# 🚀 Training data import
+try:
+    from training_data import TRAIN_DATA
+except ImportError:
+    # Fallback agar file na mile
+    TRAIN_DATA = [("hello", "general"), ("code python", "coding")]
 
 # --- DATABASE SETUP ---
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./chat_history_v3.db")
@@ -48,30 +53,34 @@ class MySearchTool(BaseTool):
 
 search_tool = MySearchTool()
 
+# --- HELPER FUNCTIONS ---
 def get_groq_llm(key_index):
     keys = [os.getenv(f"GROQ_API_KEY_{i}", "").strip() for i in range(1, 51)]
     valid_keys = [k for k in keys if k]
-    if not valid_keys: raise ValueError("Render par API Keys missing hain!")
+    if not valid_keys: raise ValueError("API Keys missing hain!")
     
     return LLM(
         model="groq/llama-3.1-8b-instant", 
         api_key=valid_keys[key_index % len(valid_keys)],
         base_url="https://api.groq.com/openai/v1",
-        temperature=0.3  # 🚀 MAGIC WAND: Isse AI overacting aur fake words banana band kar dega
+        temperature=0.3 
     )
 
 def get_total_valid_keys():
     keys = [os.getenv(f"GROQ_API_KEY_{i}", "").strip() for i in range(1, 51)]
     return len([k for k in keys if k])
 
-class UserRequest(BaseModel):
-    session_id: str
-    user_name: str
-    question: str
+# 🚀 NAYA: Length Detector Function
+def check_if_long_response_needed(text):
+    long_keywords = [
+        'detail', 'explain', 'brief', 'long', 'essay', 'paragraph', 
+        'achhe se', 'vistar se', 'vistar mein', 'poora batao', 
+        'step by step', 'bada karke', 'jyada batao', 'deeply'
+    ]
+    text_lower = text.lower()
+    return any(word in text_lower for word in long_keywords)
 
-# --- MASSIVE ML ROUTER DATASET (Ultra-High Accuracy) ---
-
-
+# --- ML ROUTER ---
 texts, labels = zip(*TRAIN_DATA)
 ml_router = make_pipeline(TfidfVectorizer(), MultinomialNB())
 ml_router.fit(texts, labels)
@@ -79,32 +88,35 @@ ml_router.fit(texts, labels)
 def detect_category(text):
     return ml_router.predict([text.lower()])[0]
 
-def is_similar(current_q, past_q):
-    words_current = set(current_q.lower().split())
-    words_past = set(past_q.lower().split())
-    if not words_current or not words_past: return False
-    overlap = len(words_current.intersection(words_past))
-    return (overlap / len(words_current)) >= 0.50
+class UserRequest(BaseModel):
+    session_id: str
+    user_name: str
+    question: str
 
+# --- MAIN API ENDPOINT ---
 @app.post("/ask")
 def ask_agent(request: UserRequest, db: Session = Depends(get_db)):
     past_messages = db.query(ChatMessage).filter(ChatMessage.session_id == request.session_id).order_by(ChatMessage.id.desc()).limit(4).all()
     current_category = detect_category(request.question)
-    history_str = ""
     
+    # 🚀 Word Limit Logic
+    is_detailed_requested = check_if_long_response_needed(request.question)
+    if is_detailed_requested:
+        length_instruction = "7. LENGTH RULE: User wants a detailed answer. Provide a comprehensive, long, and in-depth explanation."
+    else:
+        length_instruction = "7. LENGTH RULE: Keep your answer CONCISE and strictly UNDER 300 words. Do not stretch the response unnecessarily."
+
+    history_str = ""
     if past_messages:
         last_msg_category = detect_category(past_messages[0].user_query)
-        
-        # 🚀 SMART MEMORY MANAGER: Topic badalte hi Memory Delete!
         if current_category != last_msg_category and current_category != 'general':
-            history_str = "[System Alert: User switched the topic. Forget all previous chat memory and focus ONLY on the new query.]\n"
+            history_str = "[System Alert: User switched the topic. Forget all previous chat memory.]\n"
         else:
             for m in reversed(past_messages):
                 clean_ai_resp = re.sub(r'<.*?>', '', m.ai_response).split('\n\n[Key:')[0].strip()
                 history_str += f"User: {m.user_query}\nAgent: {clean_ai_resp}\n"
 
     answer = "Bhai, saari keys busy hain. Thoda wait kar le."
-    current_date = datetime.now().strftime("%Y-%m-%d")
     total_keys = get_total_valid_keys()
 
     for i in range(total_keys if total_keys > 0 else 1):
@@ -112,37 +124,40 @@ def ask_agent(request: UserRequest, db: Session = Depends(get_db)):
             current_llm = get_groq_llm(i)
             
             backstory_text = (
-                f"You are a smart, highly accurate, and helpful AI assistant talking to your friend {request.user_name}. "
-                "CRITICAL RULES FOR YOUR RESPONSE: "
-                "1. LANGUAGE: You MUST reply in natural, everyday 'Hinglish' (Hindi spoken in daily life, written in the English alphabet). "
-                "2. TONE: Be friendly, clear, and direct. Do NOT use highly formal pure Hindi words (avoid words like 'uplabdh', 'vishal', 'shasit'). "
-                "3. NO FAKE SLANG: Do NOT invent weird words (like 'khanos' or 'nayaan'). Speak simply. "
-                "4. MATH & LOGIC: If asked a math calculation, solve it step-by-step using standard English math terms (like 'multiply', 'subtract', 'BODMAS rule'). Do NOT translate math terms into weird Hindi. "
-                f"5. ADDRESSING: Politely address the user by their name ({request.user_name}) in a natural way. "
-                "6. CLEAN OUTPUT: Never output <function> tags, XML, or internal JSON. "
+                f"You are an intelligent, highly accurate AI assistant talking to your friend. "
+                f"CRITICAL RULES: "
+                f"1. NAME: Use '{request.user_name}'. "
+                "2. NO NARRATION: Don't say 'Searching...'. Just give the answer. "
+                "3. NO HALLUCINATION: If unsure, say 'Bhai, sahi jankari nahi mil rahi'. "
+                "4. LANGUAGE: Natural Hinglish. "
+                "5. NO TAGS: No JSON/XML in final answer. "
+                "6. CODE: Always use triple backticks (```). "
+                f"{length_instruction} " # 🚀 Dynamic Instruction Integrated
                 f"\n--- Chat History ---\n{history_str}\n-------------------"
             )
             
             smart_agent = Agent(
                 role='AI Assistant',
-                goal=f'Provide highly accurate and natural Hinglish answers to {request.user_name}.',
+                goal=f'Provide accurate Hinglish answers to {request.user_name}.',
                 backstory=backstory_text,
                 tools=[search_tool],
                 llm=current_llm,
                 verbose=False
             )
             
-            task_desc = f"User ({request.user_name}) asks: {request.question}. Provide a smart, logically correct, and natural Hinglish response."
-            task = Task(description=task_desc, expected_output="A clean, logical Hinglish response.", agent=smart_agent)
+            task = Task(
+                description=f"User asks: {request.question}. Answer strictly following the LENGTH RULE provided in backstory.",
+                expected_output="A fact-checked Hinglish response.",
+                agent=smart_agent
+            )
             
             raw_answer = str(Crew(agents=[smart_agent], tasks=[task]).kickoff())
             
             if raw_answer and not raw_answer.startswith("Agent stopped"):
                 clean_answer = re.sub(r'<.*?>', '', raw_answer)
                 clean_answer = re.sub(r'function=.*?>', '', clean_answer)
-                clean_answer = clean_answer.replace('{ "code":', '').replace('}', '').strip()
                 
-                approx_tokens = int((len(backstory_text) + len(task_desc) + len(clean_answer)) / 4) 
+                approx_tokens = int((len(backstory_text) + len(clean_answer)) / 4) 
                 answer = f"{clean_answer}\n\n[Key: {i+1} | Est. Tokens: {approx_tokens}]"
                 break 
 
