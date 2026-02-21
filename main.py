@@ -11,7 +11,7 @@ from crewai import Agent, Task, Crew, LLM
 from crewai.tools import BaseTool
 from crewai_tools import SerperDevTool
 
-# 🚀 FIX: CrewAI ka 20 second wala prompt aur tracing band
+# 🚀 FIX: CrewAI ka tracing aur timeout prompts band
 os.environ["CREWAI_TRACING_ENABLED"] = "False"
 os.environ["OTEL_SDK_DISABLED"] = "true"
 
@@ -61,17 +61,17 @@ search_tool = MySearchTool()
 def get_librarian_llm(key_index):
     keys = [os.getenv(f"GROQ_API_KEY_{i}", "").strip() for i in range(1, 3)]
     valid_keys = [k for k in keys if k]
-    return LLM(model="groq/llama-3.1-8b-instant", api_key=valid_keys[key_index % len(valid_keys)], base_url="https://api.groq.com/openai/v1", temperature=0.1)
+    return LLM(model="groq/llama-3.1-8b-instant", api_key=valid_keys[key_index % len(valid_keys) if valid_keys else 0], base_url="https://api.groq.com/openai/v1", temperature=0.1)
 
 def get_manager_llm(key_index):
     keys = [os.getenv(f"GROQ_API_KEY_{i}", "").strip() for i in range(3, 6)]
     valid_keys = [k for k in keys if k]
-    return LLM(model="groq/llama-3.1-8b-instant", api_key=valid_keys[key_index % len(valid_keys)], base_url="https://api.groq.com/openai/v1", temperature=0.1)
+    return LLM(model="groq/llama-3.1-8b-instant", api_key=valid_keys[key_index % len(valid_keys) if valid_keys else 0], base_url="https://api.groq.com/openai/v1", temperature=0.1)
 
 def get_worker_llm(key_index):
     keys = [os.getenv(f"GROQ_API_KEY_{i}", "").strip() for i in range(6, 51)]
     valid_keys = [k for k in keys if k]
-    return LLM(model="groq/llama-3.3-70b-versatile", api_key=valid_keys[key_index % len(valid_keys)], base_url="https://api.groq.com/openai/v1", temperature=0.3)
+    return LLM(model="groq/llama-3.3-70b-versatile", api_key=valid_keys[key_index % len(valid_keys) if valid_keys else 0], base_url="https://api.groq.com/openai/v1", temperature=0.3)
 
 class UserRequest(BaseModel):
     session_id: str
@@ -82,10 +82,8 @@ def extract_json(response_text):
     start_idx = response_text.find('{')
     end_idx = response_text.rfind('}')
     if start_idx != -1 and end_idx != -1:
-        try:
-            return json.loads(response_text[start_idx:end_idx+1])
-        except:
-            return None
+        try: return json.loads(response_text[start_idx:end_idx+1])
+        except: return None
     return None
 
 # --- MAIN API ENDPOINT ---
@@ -109,30 +107,24 @@ def ask_agent(request: UserRequest, db: Session = Depends(get_db)):
     current_time_str = datetime.now().strftime("%A, %d %B %Y, %I:%M %p")
 
     # ==========================================
-    # 🚀 PHASE 1: THE LIBRARIAN AI (Memory Filter)
+    # 🚀 PHASE 1: THE LIBRARIAN AI (With Duplication Check)
     # ==========================================
     librarian_prompt = f"""
     Current Time: {current_time_str}
-    Chat History:
-    {history_str if history_str else "No history yet."}
-    Current Persona: "{user_profile.persona}"
+    Chat History: {history_str}
     New Query: "{request.question}"
     
     Task:
-    1. Extract ONLY past messages relevant to the New Query.
-    2. Update Persona ONLY if user gives stylistic preference (e.g. "short answers"). DO NOT add topics.
+    1. Extract ONLY related context.
+    2. IMPORTANT: If user asks for joke/story, note PREVIOUS ones from history so Worker doesn't repeat.
+    3. Update Persona only for stylistic preferences.
     
-    RETURN STRICTLY VALID JSON:
-    {{
-        "relevant_history": "string",
-        "updated_user_persona": "string"
-    }}
+    RETURN JSON: {{"relevant_history": "string", "updated_user_persona": "string"}}
     """
     librarian_data = {"relevant_history": "", "updated_user_persona": user_profile.persona}
     for i in range(2):
         try:
-            lib_llm = get_librarian_llm(i)
-            lib_res = str(lib_llm.call(messages=[{"role": "user", "content": librarian_prompt}]))
+            lib_res = str(get_librarian_llm(i).call(messages=[{"role": "user", "content": librarian_prompt}]))
             parsed = extract_json(lib_res)
             if parsed: 
                 librarian_data = parsed
@@ -144,7 +136,7 @@ def ask_agent(request: UserRequest, db: Session = Depends(get_db)):
         db.commit()
 
     # ==========================================
-    # 🚀 PHASE 2: THE MANAGER AI (Strategy)
+    # 🚀 PHASE 2: THE MANAGER AI (Strategy & Language Lock)
     # ==========================================
     manager_prompt = f"""
     Current Time: {current_time_str}
@@ -152,24 +144,17 @@ def ask_agent(request: UserRequest, db: Session = Depends(get_db)):
     New Query: "{request.question}"
     
     Task:
-    1. CATEGORIZE the topic strictly (news, coding, general, etc.).
-    2. EFFECTIVE QUERY: If query is short ("Haa", "Ok"), rewrite it using history into a full descriptive question.
-    3. RULES: Write strict rules for Worker AI to avoid narration and focus ONLY on the current topic.
+    1. CATEGORIZE topic.
+    2. EFFECTIVE QUERY: Rewrite short queries (e.g. 'haa', 'karo') into full descriptive intents.
+    3. LANGUAGE RULE: Enforce Hinglish (50% Hindi, 50% English). No long pure Hindi blocks.
+    4. ACTION: Tell Worker NO permission seeking. Just provide results.
     
-    RETURN STRICTLY VALID JSON:
-    {{
-        "category": "string",
-        "effective_query": "string",
-        "worker_instructions": "string"
-    }}
+    RETURN JSON: {{"category": "string", "effective_query": "string", "worker_instructions": "string"}}
     """
-    manager_data = {"category": "general", "effective_query": request.question, "worker_instructions": "Be direct."}
-    manager_used_key = "Failsafe"
-    
+    manager_data = {"category": "general", "effective_query": request.question, "worker_instructions": "Be direct and use Hinglish."}
     for i in range(3):
         try:
-            mgr_llm = get_manager_llm(i)
-            mgr_res = str(mgr_llm.call(messages=[{"role": "user", "content": manager_prompt}]))
+            mgr_res = str(get_manager_llm(i).call(messages=[{"role": "user", "content": manager_prompt}]))
             parsed = extract_json(mgr_res)
             if parsed:
                 manager_data = parsed
@@ -178,10 +163,10 @@ def ask_agent(request: UserRequest, db: Session = Depends(get_db)):
         except: continue
 
     # ==========================================
-    # 🚀 PHASE 3: THE WORKER AI (Execution)
+    # 🚀 PHASE 3: THE WORKER AI (Anti-Narration Execution)
     # ==========================================
     filtered_history = librarian_data.get("relevant_history", "")
-    final_history = f"[Context:\n{filtered_history}]" if filtered_history.strip() else "[No context.]"
+    final_history = f"[Context:\n{filtered_history}]" if filtered_history.strip() else "[No past context.]"
     actual_intent = manager_data.get("effective_query", request.question)
     query_category = manager_data.get("category", "general")
 
@@ -192,24 +177,19 @@ def ask_agent(request: UserRequest, db: Session = Depends(get_db)):
             worker_llm = get_worker_llm(i)
             backstory_text = (
                 f"You are {request.user_name}'s expert AI. Today: {current_time_str}. "
-                "CRITICAL: NO NARRATION. Do not say 'searching...'. Just give final answer. "
-                f"TOPIC: '{query_category}'. Hinglish only. "
+                "CRITICAL RULES: "
+                "1. NO NARRATION: Never say 'I am searching' or 'Can I tell you?'. Provide results IMMEDIATELY. "
+                "2. NO REPETITION: Do not repeat jokes/stories found in context. "
+                "3. LANGUAGE: Natural Hinglish (Mix of Hindi/English). Avoid pure Hindi lectures. "
+                "4. DIRECT ACTION: If intent is 'haa' or 'batao', show the info NOW. "
+                f"TOPIC: '{query_category}'. "
                 f"\n👤 PERSONA: {user_profile.persona}"
-                f"\n🔥 RULES: {manager_data.get('worker_instructions')} 🔥"
+                f"\n🔥 MANAGER RULES: {manager_data.get('worker_instructions')} 🔥"
                 f"\n--- Context ---\n{final_history}\n-------------------"
             )
             
-            smart_agent = Agent(
-                role='Expert Responder',
-                goal='Direct answer without narration.',
-                backstory=backstory_text,
-                tools=[search_tool],
-                llm=worker_llm,
-                max_iter=4, 
-                verbose=False
-            )
-            
-            task = Task(description=f"User intent: {actual_intent}. Answer directly.", expected_output="Clean response.", agent=smart_agent)
+            smart_agent = Agent(role='Expert Responder', goal='Final answer without narration.', backstory=backstory_text, tools=[search_tool], llm=worker_llm, max_iter=4, verbose=False)
+            task = Task(description=f"User intent: {actual_intent}. Answer directly.", expected_output="Clean Hinglish response.", agent=smart_agent)
             raw_answer = str(Crew(agents=[smart_agent], tasks=[task]).kickoff())
             
             if raw_answer and not raw_answer.startswith("Agent stopped"):
@@ -218,7 +198,7 @@ def ask_agent(request: UserRequest, db: Session = Depends(get_db)):
                 clean_answer = re.sub(r'<.*?>', '', clean_answer).strip()
                 
                 approx_tokens = int((len(backstory_text) + len(clean_answer)) / 4) 
-                answer = f"{clean_answer}\n\n[L: 1/2 | M: {manager_used_key} | W: {i+6} | Tok: {approx_tokens}]"
+                answer = f"{clean_answer}\n\n[L: 1/2 | M: {manager_data.get('category')} | W: {i+6} | Tok: {approx_tokens}]"
                 break 
         except Exception as e:
             print(f"DEBUG: Worker Error Key {i+6}: {str(e)}")
