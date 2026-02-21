@@ -17,7 +17,6 @@ from sklearn.pipeline import make_pipeline
 try:
     from training_data import TRAIN_DATA
 except ImportError:
-    # Fallback agar file na mile
     TRAIN_DATA = [("hello", "general"), ("code python", "coding")]
 
 # --- DATABASE SETUP ---
@@ -70,16 +69,6 @@ def get_total_valid_keys():
     keys = [os.getenv(f"GROQ_API_KEY_{i}", "").strip() for i in range(1, 51)]
     return len([k for k in keys if k])
 
-# 🚀 NAYA: Length Detector Function
-def check_if_long_response_needed(text):
-    long_keywords = [
-        'detail', 'explain', 'brief', 'long', 'essay', 'paragraph', 
-        'achhe se', 'vistar se', 'vistar mein', 'poora batao', 
-        'step by step', 'bada karke', 'jyada batao', 'deeply'
-    ]
-    text_lower = text.lower()
-    return any(word in text_lower for word in long_keywords)
-
 # --- ML ROUTER ---
 texts, labels = zip(*TRAIN_DATA)
 ml_router = make_pipeline(TfidfVectorizer(), MultinomialNB())
@@ -99,16 +88,10 @@ def ask_agent(request: UserRequest, db: Session = Depends(get_db)):
     past_messages = db.query(ChatMessage).filter(ChatMessage.session_id == request.session_id).order_by(ChatMessage.id.desc()).limit(4).all()
     current_category = detect_category(request.question)
     
-    # 🚀 Word Limit Logic
-    is_detailed_requested = check_if_long_response_needed(request.question)
-    if is_detailed_requested:
-        length_instruction = "7. LENGTH RULE: User wants a detailed answer. Provide a comprehensive, long, and in-depth explanation."
-    else:
-        length_instruction = "7. LENGTH RULE: Keep your answer CONCISE and strictly UNDER 300 words. Do not stretch the response unnecessarily."
-
     history_str = ""
     if past_messages:
         last_msg_category = detect_category(past_messages[0].user_query)
+        # Topic switch logic
         if current_category != last_msg_category and current_category != 'general':
             history_str = "[System Alert: User switched the topic. Forget all previous chat memory.]\n"
         else:
@@ -126,19 +109,18 @@ def ask_agent(request: UserRequest, db: Session = Depends(get_db)):
             backstory_text = (
                 f"You are an intelligent, highly accurate AI assistant talking to your friend. "
                 f"CRITICAL RULES: "
-                f"1. NAME: Use '{request.user_name}'. "
-                "2. NO NARRATION: Don't say 'Searching...'. Just give the answer. "
-                "3. NO HALLUCINATION: If unsure, say 'Bhai, sahi jankari nahi mil rahi'. "
-                "4. LANGUAGE: Natural Hinglish. "
-                "5. NO TAGS: No JSON/XML in final answer. "
-                "6. CODE: Always use triple backticks (```). "
-                f"{length_instruction} " # 🚀 Dynamic Instruction Integrated
+                f"1. NAME: Always call the user '{request.user_name}'. "
+                "2. NO NARRATION: Don't say 'Searching the web...'. Just give the direct answer. "
+                "3. NO HALLUCINATION: If facts are missing, say 'Bhai, iski sahi jankari nahi mil rahi'. "
+                "4. LANGUAGE: Speak in natural, cool Hinglish. "
+                "5. NO TAGS: Never show JSON/XML tags in final output. "
+                "6. CODE: Wrap every code snippet in triple backticks (```). "
                 f"\n--- Chat History ---\n{history_str}\n-------------------"
             )
             
             smart_agent = Agent(
                 role='AI Assistant',
-                goal=f'Provide accurate Hinglish answers to {request.user_name}.',
+                goal=f'Provide accurate, helpful Hinglish answers to {request.user_name}.',
                 backstory=backstory_text,
                 tools=[search_tool],
                 llm=current_llm,
@@ -146,8 +128,8 @@ def ask_agent(request: UserRequest, db: Session = Depends(get_db)):
             )
             
             task = Task(
-                description=f"User asks: {request.question}. Answer strictly following the LENGTH RULE provided in backstory.",
-                expected_output="A fact-checked Hinglish response.",
+                description=f"User asks: {request.question}. Provide a fact-checked, high-quality answer in Hinglish.",
+                expected_output="A direct, helpful Hinglish response.",
                 agent=smart_agent
             )
             
