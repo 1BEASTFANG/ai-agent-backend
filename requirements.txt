@@ -12,3 +12,4 @@ python-dotenv
 litellm
 crewai[tools]
 apscheduler
+email-validator
