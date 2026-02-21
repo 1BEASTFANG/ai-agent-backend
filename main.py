@@ -58,11 +58,12 @@ def get_groq_llm(key_index):
     valid_keys = [k for k in keys if k]
     if not valid_keys: raise ValueError("API Keys missing hain!")
     
+    # 🚀 MODEL UPGRADED TO 70B
     return LLM(
-        model="groq/llama-3.1-8b-instant", 
+        model="groq/llama-3.3-70b-versatile", 
         api_key=valid_keys[key_index % len(valid_keys)],
         base_url="https://api.groq.com/openai/v1",
-        temperature=0.3 
+        temperature=0.4 
     )
 
 def get_total_valid_keys():
@@ -86,14 +87,18 @@ class UserRequest(BaseModel):
 @app.post("/ask")
 def ask_agent(request: UserRequest, db: Session = Depends(get_db)):
     past_messages = db.query(ChatMessage).filter(ChatMessage.session_id == request.session_id).order_by(ChatMessage.id.desc()).limit(4).all()
+    
+    # 🚀 CONFIRMATION LOGIC
+    user_q_lower = request.question.lower().strip()
+    is_confirmation = user_q_lower in ["haa", "ha", "yes", "ji", "ok", "theek", "batao", "bataiye"]
     current_category = detect_category(request.question)
     
     history_str = ""
     if past_messages:
         last_msg_category = detect_category(past_messages[0].user_query)
-        # Topic switch logic
-        if current_category != last_msg_category and current_category != 'general':
-            history_str = "[System Alert: User switched the topic. Forget all previous chat memory.]\n"
+        # Topic switch logic: Confirmation words don't trigger topic switch alert
+        if not is_confirmation and current_category != last_msg_category and current_category != 'general':
+            history_str = "[System Alert: User switched the topic. Forget previous memory.]\n"
         else:
             for m in reversed(past_messages):
                 clean_ai_resp = re.sub(r'<.*?>', '', m.ai_response).split('\n\n[Key:')[0].strip()
@@ -107,29 +112,34 @@ def ask_agent(request: UserRequest, db: Session = Depends(get_db)):
             current_llm = get_groq_llm(i)
             
             backstory_text = (
-                f"You are an intelligent, highly accurate AI assistant talking to your friend. "
-                f"CRITICAL RULES: "
+                f"You are a highly capable AI expert talking to your friend '{request.user_name}'. "
+                "CRITICAL RULES: "
                 f"1. NAME: Always call the user '{request.user_name}'. "
-                "2. NO NARRATION: Don't say 'Searching the web...'. Just give the direct answer. "
-                "3. NO HALLUCINATION: If facts are missing, say 'Bhai, iski sahi jankari nahi mil rahi'. "
-                "4. LANGUAGE: Speak in natural, cool Hinglish. "
-                "5. NO TAGS: Never show JSON/XML tags in final output. "
-                "6. CODE: Wrap every code snippet in triple backticks (```). "
+                "2. NO NARRATION: Just give the direct answer without saying 'I am searching'. "
+                "3. SEARCH RULE: Always use internet_search for recommendations or current events. "
+                "4. NO GIVING UP: Be persistent. Summarize web info if perfect answer isn't found. "
+                "5. LANGUAGE: Natural Hinglish. "
+                "6. CODE: Triple backticks (```). "
                 f"\n--- Chat History ---\n{history_str}\n-------------------"
             )
             
             smart_agent = Agent(
-                role='AI Assistant',
-                goal=f'Provide accurate, helpful Hinglish answers to {request.user_name}.',
+                role='Expert Researcher',
+                goal=f'Provide detailed, fact-checked Hinglish answers to {request.user_name}.',
                 backstory=backstory_text,
                 tools=[search_tool],
                 llm=current_llm,
                 verbose=False
             )
             
+            # 🚀 TASK LOGIC FOR CONFIRMATIONS
+            effective_query = request.question
+            if is_confirmation and past_messages:
+                effective_query = f"Provide full details for: {past_messages[0].user_query}"
+
             task = Task(
-                description=f"User asks: {request.question}. Provide a fact-checked, high-quality answer in Hinglish.",
-                expected_output="A direct, helpful Hinglish response.",
+                description=f"User asks: {effective_query}. Provide a high-quality, research-based response.",
+                expected_output="A helpful Hinglish response.",
                 agent=smart_agent
             )
             
@@ -138,7 +148,6 @@ def ask_agent(request: UserRequest, db: Session = Depends(get_db)):
             if raw_answer and not raw_answer.startswith("Agent stopped"):
                 clean_answer = re.sub(r'<.*?>', '', raw_answer)
                 clean_answer = re.sub(r'function=.*?>', '', clean_answer)
-                
                 approx_tokens = int((len(backstory_text) + len(clean_answer)) / 4) 
                 answer = f"{clean_answer}\n\n[Key: {i+1} | Est. Tokens: {approx_tokens}]"
                 break 
@@ -154,4 +163,4 @@ def ask_agent(request: UserRequest, db: Session = Depends(get_db)):
 
 @app.get("/")
 def root():
-    return {"message": "Multi-Tenant AI is Live!"}
+    return {"message": "Nikhil's AI Backend is Live!"}
