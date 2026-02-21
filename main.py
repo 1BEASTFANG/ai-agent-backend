@@ -95,10 +95,10 @@ class UserRequest(BaseModel):
 # --- MAIN API ENDPOINT ---
 @app.post("/ask")
 def ask_agent(request: UserRequest, db: Session = Depends(get_db)):
-    # 1. Purani history nikalo (Last 3 messages)
-    past_messages = db.query(ChatMessage).filter(ChatMessage.session_id == request.session_id).order_by(ChatMessage.id.desc()).limit(3).all()
+    # 🚀 1. Ab hum last 10 messages (Lambi History) nikalenge
+    past_messages = db.query(ChatMessage).filter(ChatMessage.session_id == request.session_id).order_by(ChatMessage.id.desc()).limit(10).all()
     
-    # 🚀 NAYA: Database se User ka Profile nikalo
+    # User Profile fetch karna
     user_profile = db.query(UserProfile).filter(UserProfile.user_name == request.user_name).first()
     if not user_profile:
         user_profile = UserProfile(user_name=request.user_name)
@@ -108,35 +108,35 @@ def ask_agent(request: UserRequest, db: Session = Depends(get_db)):
     
     history_str = ""
     if past_messages:
-        for m in reversed(past_messages):
+        for i, m in enumerate(reversed(past_messages)):
             clean_ai_resp = re.sub(r'<.*?>', '', m.ai_response).split('\n\n[')[0].strip()
-            history_str += f"User: {m.user_query}\nAgent: {clean_ai_resp}\n"
+            # Har message ko number de rahe hain taaki Manager aasaani se padh sake
+            history_str += f"[{i+1}] User: {m.user_query}\nAgent: {clean_ai_resp}\n"
 
     # ==========================================
-    # 🚀 PHASE 1: THE MANAGER AI (With Dynamic Persona)
+    # 🚀 PHASE 1: THE MANAGER AI (Smart History Filter & Persona)
     # ==========================================
     manager_prompt = f"""
-    Analyze the user's query and update their long-term persona if needed.
+    Analyze the New User Query and the Chat History (last 10 interactions).
     
     Chat History:
     {history_str if history_str else "No history yet."}
     
-    Current User Persona (What we know about their preferences so far):
-    "{user_profile.persona}"
+    Current User Persona: "{user_profile.persona}"
     
     New User Query: "{request.question}"
     
     Task:
-    1. Check if the New Query is a continuation of the Chat History.
-    2. Determine the formatting rules the responding AI should follow.
-    3. Update the 'Current User Persona' if the user expresses a new preference (e.g., they ask for short answers, code only, specific languages, etc.). Keep it as a concise summary.
+    1. Scan the entire Chat History. Find ONLY the past interactions that are directly related to the New Query.
+    2. Extract and summarize that specific past context. If the New Query is completely unrelated to anything in the past, leave it as an empty string ("").
+    3. Determine rules for the responding AI.
+    4. Update the Persona if the user gives a new preference.
     
     RETURN STRICTLY A VALID JSON OBJECT WITH NO OTHER TEXT:
     {{
-        "is_new_topic": true or false,
-        "category": "string",
-        "worker_instructions": "string (Specific rules for the responding AI for this query)",
-        "updated_user_persona": "string (The updated long-term preferences of this user)"
+        "relevant_history": "string (Summary of only the past messages related to the new query. Leave empty if no relation.)",
+        "worker_instructions": "string (Specific rules for the responding AI)",
+        "updated_user_persona": "string"
     }}
     """
     
@@ -158,27 +158,28 @@ def ask_agent(request: UserRequest, db: Session = Depends(get_db)):
 
     if not manager_data:
         manager_data = {
-            "is_new_topic": False, 
-            "category": "general", 
+            "relevant_history": "", 
             "worker_instructions": "Provide a helpful response.",
             "updated_user_persona": user_profile.persona
         }
         manager_used_key = "Failsafe"
 
-    # 🚀 NAYA: User ki nayi pasand Database mein hamesha ke liye save karein
     if manager_data.get("updated_user_persona"):
         user_profile.persona = manager_data.get("updated_user_persona")
         db.commit()
 
     # ==========================================
-    # 🚀 PHASE 2: MEMORY MANAGEMENT 
+    # 🚀 PHASE 2: MEMORY MANAGEMENT (Smart Context)
     # ==========================================
-    final_history = history_str
-    if manager_data.get("is_new_topic") == True:
-        final_history = "[System Alert: User switched to a completely new topic. Ignore the context of previous messages and focus ONLY on the new query.]\n"
+    # Ab Worker ko poori history nahi jayegi, sirf utni jayegi jitni Manager ne filter ki hai!
+    filtered_history = manager_data.get("relevant_history", "")
+    if not filtered_history.strip():
+        final_history = "[No relevant past context. Treat this as a fresh topic.]"
+    else:
+        final_history = f"[Relevant Past Context provided by Manager:\n{filtered_history}]"
 
     # ==========================================
-    # 🚀 PHASE 3: THE WORKER AI (Guided by Persona)
+    # 🚀 PHASE 3: THE WORKER AI (Guided by Persona & Filtered History)
     # ==========================================
     answer = "Bhai, saari keys busy hain. Thoda wait kar le."
     total_worker_keys = get_total_worker_keys()
@@ -196,13 +197,13 @@ def ask_agent(request: UserRequest, db: Session = Depends(get_db)):
                 "4. LANGUAGE: Natural Hinglish. "
                 "5. CODE: Triple backticks (```). "
                 f"\n👤 USER PERSONA (Strictly adapt your tone and style to this): {user_profile.persona}"
-                f"\n🔥 MANAGER'S STRICT INSTRUCTIONS FOR THIS PROMPT: {manager_data.get('worker_instructions')} 🔥"
+                f"\n🔥 MANAGER'S INSTRUCTIONS: {manager_data.get('worker_instructions')} 🔥"
                 f"\n--- Chat History ---\n{final_history}\n-------------------"
             )
             
             smart_agent = Agent(
                 role='Expert Responder',
-                goal=f'Provide the perfect response tailored exactly to the User Persona.',
+                goal='Provide the perfect response based on the instructions, persona, and relevant history.',
                 backstory=backstory_text,
                 tools=[search_tool],
                 llm=worker_llm,
@@ -210,8 +211,8 @@ def ask_agent(request: UserRequest, db: Session = Depends(get_db)):
             )
             
             task = Task(
-                description=f"User asks: {request.question}. Formulate your response based strictly on the Manager's Instructions and the User Persona.",
-                expected_output="A helpful Hinglish response tailored to the user's exact needs and preferences.",
+                description=f"User asks: {request.question}. Formulate your response based strictly on the Manager's Instructions, Persona, and the provided Relevant History.",
+                expected_output="A helpful Hinglish response tailored to the user.",
                 agent=smart_agent
             )
             
@@ -222,7 +223,9 @@ def ask_agent(request: UserRequest, db: Session = Depends(get_db)):
                 clean_answer = re.sub(r'function=.*?>', '', clean_answer)
                 
                 approx_tokens = int((len(backstory_text) + len(clean_answer)) / 4) 
-                answer = f"{clean_answer}\n\n[M-Key: {manager_used_key} | W-Key: {i+6} | Est. Tokens: {approx_tokens}]"
+                # Naya Tag: Context ka status bhi dikhega
+                context_status = "Used" if filtered_history.strip() else "Hidden"
+                answer = f"{clean_answer}\n\n[M-Key: {manager_used_key} | W-Key: {i+6} | Ctx: {context_status} | Tok: {approx_tokens}]"
                 break 
 
         except Exception as e:
