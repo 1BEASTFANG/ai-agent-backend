@@ -139,14 +139,15 @@ def ask_agent(request: UserRequest, db: Session = Depends(get_db)):
             current_llm = get_groq_llm(i)
             
             # 🚀 NAYA UPDATE: AI ab dynamically us dost ka naam aur info use karega
-            backstory_text = (
-                f"Date: {current_date}. Tu ek smart AI assistant hai. "
-                "TUJHE IN RULES KO HAR HAAL MEIN MAANNA HAI: "
-                f"1. THE USER IS {request.user_name.upper()}: Jo insaan tujhse abhi chat kar raha hai, uska naam {request.user_name} hai. Tujhe {request.user_name} se directly baat karni hai ('Aap' ya 'Tu' keh kar). "
-                "2. HINGLISH COMPREHENSION: Dhyan se padh! User short form use karega. Jaise 'kha' ka matlab 'kahan' (where) hota hai. "
-                "3. NO AI LECTURES: Agar user 'hi', 'hello' ya 'kya bol rahe ho' kahe, toh 1 line mein direct jawab de. Apne rules mat suna. "
-                "4. NO TOOL LEAKS: Kabhi bhi <internet_search> ya -function output mein mat likh. "
-                f"\n--- Chat History ---\n{history_str}\n-------------------"
+           backstory_text = (
+                f"Date: {current_date}. Tera naam 'Nikhil's AI' hai. "
+                f"Tu {request.user_name} ka ek cool aur smart dost hai. "
+                "TERE RULES: "
+                "1. TONE: Ekdam natural Hinglish bol. 'Vishal shahar' mat bol, 'bada sheher' bol. "
+                "2. NO ROBOT TALK: Jawab seedha aur chota de. Zyada formality mat dikha. "
+                "3. NO TAGS: Kabhi bhi apne jawab mein <function>, JSON, ya code tags mat dikhana. "
+                "4. CONTEXT: User short form use karega, tu samajh jaana. "
+                f"\n--- Pichli Baatein ---\n{history_str}\n-------------------"
             )
             
             smart_agent = Agent(
@@ -164,10 +165,14 @@ def ask_agent(request: UserRequest, db: Session = Depends(get_db)):
             raw_answer = str(Crew(agents=[smart_agent], tasks=[task]).kickoff())
             
             if raw_answer and not raw_answer.startswith("Agent stopped"):
-                 raw_answer = raw_answer.replace("-function=internet_search>", "").strip()
-                 approx_tokens = int((len(backstory_text) + len(task_desc) + len(raw_answer)) / 4) 
-                 answer = f"{raw_answer}\n\n[Key: {i+1} | Est. Tokens: {approx_tokens}]"
-                 break 
+                # 🚀 NAYA CLEANING LOGIC: Saare <tags> aur JSON-like structure hata dega
+                import re
+                clean_answer = re.sub(r'<.*?>', '', raw_answer) # Saare HTML/XML tags hatayega
+                clean_answer = clean_answer.replace('function=', '').strip()
+                
+                approx_tokens = int((len(backstory_text) + len(task_desc) + len(clean_answer)) / 4) 
+                answer = f"{clean_answer}\n\n[Key: {i+1} | Est. Tokens: {approx_tokens}]"
+                break
         except Exception as e:
             print(f"DEBUG: Error with Key {i+1}: {str(e)}")
             continue
