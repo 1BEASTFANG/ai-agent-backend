@@ -1,4 +1,5 @@
 import os
+import re  # 🚀 Regex cleaning ke liye zaroori hai
 from datetime import datetime
 from fastapi import FastAPI, Depends
 from pydantic import BaseModel
@@ -13,8 +14,6 @@ from sklearn.naive_bayes import MultinomialNB
 from sklearn.pipeline import make_pipeline
 
 # --- DATABASE SETUP ---
-# Purani line: "sqlite:///./chat_history_v2.db"
-# Nayi line (v3 kar dein):
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./chat_history_v3.db")
 if DATABASE_URL.startswith("postgres://"):
     DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
@@ -23,18 +22,12 @@ engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False} i
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
-# 🚀 NAYA UPDATE: Table mein session_id add kiya taaki har dost ki chat alag rahe
 class ChatMessage(Base):
     __tablename__ = "messages"
     id = Column(Integer, primary_key=True, index=True)
-    session_id = Column(String, index=True, default="default_user") # Unique ID for each phone
+    session_id = Column(String, index=True, default="default_user")
     user_query = Column(Text)
     ai_response = Column(Text)
-# main.py mein ye line Base.metadata.create_all ke upar daalein
-# Yeh purani table ko uda dega taaki nayi table ban sake
-# Warning: Isse purani sari chat delete ho jayegi
-
-
 
 Base.metadata.create_all(bind=engine)
 app = FastAPI()
@@ -59,21 +52,22 @@ def get_groq_llm(key_index):
     if not valid_keys: raise ValueError("Render par API Keys missing hain!")
     
     return LLM(
-        model="groq/llama-3.1-8b-instant", # 🚀 Naya aur stable model
+        # 🚀 LATEST MODEL: Tokens bachayega aur decommissioning error nahi dega
+        model="groq/llama-3.1-8b-instant", 
         api_key=valid_keys[key_index % len(valid_keys)],
         base_url="https://api.groq.com/openai/v1"
-     )
+    )
+
 def get_total_valid_keys():
     keys = [os.getenv(f"GROQ_API_KEY_{i}", "").strip() for i in range(1, 51)]
     return len([k for k in keys if k])
 
-# 🚀 NAYA UPDATE: API payload mein user_name aur session_id maanga hai
 class UserRequest(BaseModel):
-    session_id: str  # Android app se ek unique ID aayegi
-    user_name: str   # App se user ka naam aayega
+    session_id: str
+    user_name: str
     question: str
 
-# --- ML ROUTER (Zero Token) ---
+# --- ML ROUTER ---
 TRAIN_DATA = [
     ("pandas dataframe read csv plot chart", "data_science"),
     ("calldata diamonds movies dataset analysis", "data_science"),
@@ -106,9 +100,7 @@ def is_similar(current_q, past_q):
 
 @app.post("/ask")
 def ask_agent(request: UserRequest, db: Session = Depends(get_db)):
-    # 🚀 NAYA UPDATE: Sirf usi specific session_id (dost) ki chat history fetch hogi
     past_messages = db.query(ChatMessage).filter(ChatMessage.session_id == request.session_id).order_by(ChatMessage.id.desc()).limit(4).all()
-    
     current_category = detect_category(request.question)
     history_str = ""
     is_forced_override = False
@@ -118,17 +110,8 @@ def ask_agent(request: UserRequest, db: Session = Depends(get_db)):
             is_forced_override = True
 
     if past_messages:
-        last_msg_category = detect_category(past_messages[0].user_query)
-        if is_forced_override:
-            history_str += "[System Alert: User repeating inputs (Frustrated). Give direct solution based on 10 Rules.]\n"
-            for m in reversed(past_messages):
-                history_str += f"User: {m.user_query}\nAgent: {m.ai_response.split(chr(10)+chr(10)+'[Key:')[0]}\n"
-        else:
-            if current_category != 'general' and last_msg_category != 'general' and current_category != last_msg_category:
-                history_str = "[System: Topic changed by user. Previous context cleared for efficiency.]\n"
-            else:
-                for m in reversed(past_messages):
-                    history_str += f"User: {m.user_query}\nAgent: {m.ai_response.split(chr(10)+chr(10)+'[Key:')[0]}\n"
+        for m in reversed(past_messages):
+            history_str += f"User: {m.user_query}\nAgent: {m.ai_response.split(chr(10)+chr(10)+'[Key:')[0]}\n"
 
     answer = "Bhai, saari keys busy hain. Thoda wait kar le."
     current_date = datetime.now().strftime("%Y-%m-%d")
@@ -138,51 +121,45 @@ def ask_agent(request: UserRequest, db: Session = Depends(get_db)):
         try:
             current_llm = get_groq_llm(i)
             
-            # 🚀 NAYA UPDATE: AI ab dynamically us dost ka naam aur info use karega
-          backstory_text = (
+            # 🚀 PERSONALIZATION: AI ab hamesha user ka naam lega
+            backstory_text = (
                 f"Date: {current_date}. Tu {request.user_name} ka smart AI dost hai. "
                 f"TUJHE HAR JAWAB MEIN {request.user_name.upper()} KA NAAM LENA HAI. "
-                f"Tera poora focus sirf {request.user_name} ki query solve karne par hona chahiye. "
                 "RULES: "
-                "1. TONE: Natural Hinglish (jaise do dost baat karte hain). "
-                "2. NO FORMAL HINDI: 'Shahar' ki jagah 'sheher', 'sthan' ki jagah 'jagah' bol. "
-                "3. NO LEAKS: Jawab mein kabhi bhi <function> ya internal tags mat dikha. "
+                "1. TONE: Natural Hinglish (cool dost ki tarah). "
+                "2. NO FORMAL HINDI: 'Shahar' ki jagah 'sheher' bol. "
+                "3. NO LEAKS: Kabhi bhi <function> ya tags mat dikha. "
                 f"\n--- Chat History ---\n{history_str}\n-------------------"
             )
             
             smart_agent = Agent(
                 role='AI Assistant',
-                goal=f'Talk directly to {request.user_name}, understand Hinglish, and give smart, short answers without leaking internal tags.',
+                goal=f'Talk directly to {request.user_name} and help them.',
                 backstory=backstory_text,
                 tools=[search_tool],
                 llm=current_llm,
                 verbose=False
             )
             
-           task_desc = (
-                f"User is {request.user_name}. Query: {request.question}. "
-                f"Directly address {request.user_name} in your reply and give a smart Hinglish answer."
-            )
+            task_desc = f"Query: {request.question}. Directly address {request.user_name} and give a smart Hinglish answer."
             task = Task(description=task_desc, expected_output="Clean Hinglish response.", agent=smart_agent)
             
             raw_answer = str(Crew(agents=[smart_agent], tasks=[task]).kickoff())
             
             if raw_answer and not raw_answer.startswith("Agent stopped"):
-                # 🚀 NAYA CLEANING LOGIC: Saare <tags> aur JSON-like structure hata dega
-                import re
-                clean_answer = re.sub(r'<.*?>', '', raw_answer) # Saare HTML/XML tags hatayega
-                clean_answer = clean_answer.replace('function=', '').strip()
+                # 🚀 TAG CLEANING: Saare internal tags aur brackets ko saaf karega
+                clean_answer = re.sub(r'<.*?>', '', raw_answer)
+                clean_answer = re.sub(r'function=.*?>', '', clean_answer)
+                clean_answer = clean_answer.replace('{ "code":', '').replace('}', '').strip()
                 
                 approx_tokens = int((len(backstory_text) + len(task_desc) + len(clean_answer)) / 4) 
                 answer = f"{clean_answer}\n\n[Key: {i+1} | Est. Tokens: {approx_tokens}]"
-                break
+                break 
+
         except Exception as e:
             print(f"DEBUG: Error with Key {i+1}: {str(e)}")
             continue
-            
-            
 
-    # 🚀 NAYA UPDATE: Naya message save karte waqt session_id bhi save hoga
     new_entry = ChatMessage(session_id=request.session_id, user_query=request.question, ai_response=answer)
     db.add(new_entry)
     db.commit()
