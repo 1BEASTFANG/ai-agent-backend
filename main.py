@@ -11,6 +11,10 @@ from crewai import Agent, Task, Crew, LLM
 from crewai.tools import BaseTool
 from crewai_tools import SerperDevTool
 
+# 🚀 FIX 1: CrewAI ka 20 second wala prompt hamesha ke liye band
+os.environ["CREWAI_TRACING_ENABLED"] = "False"
+os.environ["OTEL_SDK_DISABLED"] = "true"
+
 # --- DATABASE SETUP ---
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./chat_history_v3.db")
 if DATABASE_URL.startswith("postgres://"):
@@ -134,8 +138,8 @@ def ask_agent(request: UserRequest, db: Session = Depends(get_db)):
     
     RETURN STRICTLY A VALID JSON OBJECT WITH NO OTHER TEXT:
     {{
-        "relevant_history": "string (Summary of only the past messages related to the new query. Leave empty if no relation.)",
-        "worker_instructions": "string (Specific rules for the responding AI)",
+        "relevant_history": "string",
+        "worker_instructions": "string",
         "updated_user_persona": "string"
     }}
     """
@@ -147,11 +151,21 @@ def ask_agent(request: UserRequest, db: Session = Depends(get_db)):
     for i in range(total_manager_keys if total_manager_keys > 0 else 1):
         try:
             manager_llm = get_manager_llm(i)
-            manager_response = manager_llm.call(messages=[{"role": "user", "content": manager_prompt}])
-            json_str = re.sub(r"```json|```", "", manager_response).strip()
-            manager_data = json.loads(json_str)
-            manager_used_key = i + 1 
-            break 
+            manager_response = str(manager_llm.call(messages=[{"role": "user", "content": manager_prompt}]))
+            
+            # 🚀 FIX 2: Bulletproof JSON Extractor
+            # Ye kachra (Extra data) ignore karke sirf JSON uthayega
+            start_idx = manager_response.find('{')
+            end_idx = manager_response.rfind('}')
+            
+            if start_idx != -1 and end_idx != -1:
+                json_str = manager_response[start_idx:end_idx+1]
+                manager_data = json.loads(json_str)
+                manager_used_key = i + 1 
+                break 
+            else:
+                raise ValueError("Valid JSON not found in Manager response")
+                
         except Exception as e:
             print(f"DEBUG: Manager Error with Key {i+1}: {str(e)}")
             continue
@@ -171,7 +185,6 @@ def ask_agent(request: UserRequest, db: Session = Depends(get_db)):
     # ==========================================
     # 🚀 PHASE 2: MEMORY MANAGEMENT (Smart Context)
     # ==========================================
-    # Ab Worker ko poori history nahi jayegi, sirf utni jayegi jitni Manager ne filter ki hai!
     filtered_history = manager_data.get("relevant_history", "")
     if not filtered_history.strip():
         final_history = "[No relevant past context. Treat this as a fresh topic.]"
@@ -223,7 +236,6 @@ def ask_agent(request: UserRequest, db: Session = Depends(get_db)):
                 clean_answer = re.sub(r'function=.*?>', '', clean_answer)
                 
                 approx_tokens = int((len(backstory_text) + len(clean_answer)) / 4) 
-                # Naya Tag: Context ka status bhi dikhega
                 context_status = "Used" if filtered_history.strip() else "Hidden"
                 answer = f"{clean_answer}\n\n[M-Key: {manager_used_key} | W-Key: {i+6} | Ctx: {context_status} | Tok: {approx_tokens}]"
                 break 
