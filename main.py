@@ -31,7 +31,6 @@ class ChatMessage(Base):
     user_query = Column(Text)
     ai_response = Column(Text)
 
-# 🚀 NAYI TABLE: User ki pasand yaad rakhne ke liye
 class UserProfile(Base):
     __tablename__ = "user_profiles"
     id = Column(Integer, primary_key=True, index=True)
@@ -49,7 +48,7 @@ def get_db():
 # --- SEARCH TOOL ---
 class MySearchTool(BaseTool):
     name: str = "internet_search"
-    description: str = "Use this for real-time factual info from the web."
+    description: str = "Use this for real-time factual info from the web like news, prices, or specs."
     def _run(self, query: str) -> str:
         return SerperDevTool().run(search_query=str(query))
 
@@ -63,13 +62,7 @@ def get_manager_llm(key_index):
     keys = [os.getenv(f"GROQ_API_KEY_{i}", "").strip() for i in range(1, 6)]
     valid_keys = [k for k in keys if k]
     if not valid_keys: raise ValueError("Manager ke liye API Keys (1-5) missing hain!")
-    
-    return LLM(
-        model="groq/llama-3.1-8b-instant", 
-        api_key=valid_keys[key_index % len(valid_keys)],
-        base_url="https://api.groq.com/openai/v1",
-        temperature=0.1 
-    )
+    return LLM(model="groq/llama-3.1-8b-instant", api_key=valid_keys[key_index % len(valid_keys)], base_url="https://api.groq.com/openai/v1", temperature=0.1)
 
 def get_total_manager_keys():
     keys = [os.getenv(f"GROQ_API_KEY_{i}", "").strip() for i in range(1, 6)]
@@ -79,13 +72,7 @@ def get_worker_llm(key_index):
     keys = [os.getenv(f"GROQ_API_KEY_{i}", "").strip() for i in range(6, 51)]
     valid_keys = [k for k in keys if k]
     if not valid_keys: raise ValueError("Worker ke liye API Keys (6-50) missing hain!")
-    
-    return LLM(
-        model="groq/llama-3.3-70b-versatile", 
-        api_key=valid_keys[key_index % len(valid_keys)],
-        base_url="https://api.groq.com/openai/v1",
-        temperature=0.4 
-    )
+    return LLM(model="groq/llama-3.3-70b-versatile", api_key=valid_keys[key_index % len(valid_keys)], base_url="https://api.groq.com/openai/v1", temperature=0.3)
 
 def get_total_worker_keys():
     keys = [os.getenv(f"GROQ_API_KEY_{i}", "").strip() for i in range(6, 51)]
@@ -99,10 +86,8 @@ class UserRequest(BaseModel):
 # --- MAIN API ENDPOINT ---
 @app.post("/ask")
 def ask_agent(request: UserRequest, db: Session = Depends(get_db)):
-    # 🚀 1. Ab hum last 10 messages (Lambi History) nikalenge
     past_messages = db.query(ChatMessage).filter(ChatMessage.session_id == request.session_id).order_by(ChatMessage.id.desc()).limit(10).all()
     
-    # User Profile fetch karna
     user_profile = db.query(UserProfile).filter(UserProfile.user_name == request.user_name).first()
     if not user_profile:
         user_profile = UserProfile(user_name=request.user_name)
@@ -114,30 +99,33 @@ def ask_agent(request: UserRequest, db: Session = Depends(get_db)):
     if past_messages:
         for i, m in enumerate(reversed(past_messages)):
             clean_ai_resp = re.sub(r'<.*?>', '', m.ai_response).split('\n\n[')[0].strip()
-            # Har message ko number de rahe hain taaki Manager aasaani se padh sake
             history_str += f"[{i+1}] User: {m.user_query}\nAgent: {clean_ai_resp}\n"
 
+    # 🚀 NAYA: Current Time System ko dena taaki search na karna pade
+    current_time_str = datetime.now().strftime("%A, %d %B %Y, %I:%M %p")
+
     # ==========================================
-    # 🚀 PHASE 1: THE MANAGER AI (Smart History Filter & Persona)
+    # 🚀 PHASE 1: THE STRICT MANAGER AI
     # ==========================================
     manager_prompt = f"""
-    Analyze the New User Query and the Chat History (last 10 interactions).
+    Analyze the New User Query and the Chat History.
     
+    Current Date & Time: {current_time_str}
     Chat History:
     {history_str if history_str else "No history yet."}
-    
     Current User Persona: "{user_profile.persona}"
-    
     New User Query: "{request.question}"
     
     Task:
-    1. Scan the entire Chat History. Find ONLY the past interactions that are directly related to the New Query.
-    2. Extract and summarize that specific past context. If the New Query is completely unrelated to anything in the past, leave it as an empty string ("").
-    3. Determine rules for the responding AI.
-    4. Update the Persona if the user gives a new preference.
+    1. CATEGORIZE: Identify the topic of the query.
+    2. EFFECTIVE QUERY: If the New Query is just "Haa", "ok karo", "batao", look at the Chat History to see what the user actually wants and REWRITE it as a full question (e.g., "Give me the list of phones under 10000").
+    3. RELEVANT HISTORY: Extract ONLY past messages that share the SAME category.
+    4. PERSONA UPDATE: Update ONLY stylistic preferences (e.g., "short answers"). Do NOT add topics to the persona.
     
     RETURN STRICTLY A VALID JSON OBJECT WITH NO OTHER TEXT:
     {{
+        "category": "string",
+        "effective_query": "string (Crucial: Must be a complete descriptive question)",
         "relevant_history": "string",
         "worker_instructions": "string",
         "updated_user_persona": "string"
@@ -153,8 +141,6 @@ def ask_agent(request: UserRequest, db: Session = Depends(get_db)):
             manager_llm = get_manager_llm(i)
             manager_response = str(manager_llm.call(messages=[{"role": "user", "content": manager_prompt}]))
             
-            # 🚀 FIX 2: Bulletproof JSON Extractor
-            # Ye kachra (Extra data) ignore karke sirf JSON uthayega
             start_idx = manager_response.find('{')
             end_idx = manager_response.rfind('}')
             
@@ -164,16 +150,17 @@ def ask_agent(request: UserRequest, db: Session = Depends(get_db)):
                 manager_used_key = i + 1 
                 break 
             else:
-                raise ValueError("Valid JSON not found in Manager response")
-                
+                raise ValueError("Valid JSON not found")
         except Exception as e:
-            print(f"DEBUG: Manager Error with Key {i+1}: {str(e)}")
+            print(f"DEBUG: Manager Error Key {i+1}: {str(e)}")
             continue
 
     if not manager_data:
         manager_data = {
+            "category": "general",
+            "effective_query": request.question,
             "relevant_history": "", 
-            "worker_instructions": "Provide a helpful response.",
+            "worker_instructions": "Provide a direct response.",
             "updated_user_persona": user_profile.persona
         }
         manager_used_key = "Failsafe"
@@ -183,16 +170,16 @@ def ask_agent(request: UserRequest, db: Session = Depends(get_db)):
         db.commit()
 
     # ==========================================
-    # 🚀 PHASE 2: MEMORY MANAGEMENT (Smart Context)
+    # 🚀 PHASE 2: MEMORY MANAGEMENT 
     # ==========================================
     filtered_history = manager_data.get("relevant_history", "")
-    if not filtered_history.strip():
-        final_history = "[No relevant past context. Treat this as a fresh topic.]"
-    else:
-        final_history = f"[Relevant Past Context provided by Manager:\n{filtered_history}]"
+    final_history = f"[Relevant Past Context:\n{filtered_history}]" if filtered_history.strip() else "[No past context.]"
+
+    actual_intent = manager_data.get("effective_query", request.question)
+    query_category = manager_data.get("category", "general")
 
     # ==========================================
-    # 🚀 PHASE 3: THE WORKER AI (Guided by Persona & Filtered History)
+    # 🚀 PHASE 3: THE WORKER AI (Anti-Narration Rules)
     # ==========================================
     answer = "Bhai, saari keys busy hain. Thoda wait kar le."
     total_worker_keys = get_total_worker_keys()
@@ -205,35 +192,40 @@ def ask_agent(request: UserRequest, db: Session = Depends(get_db)):
                 f"You are a highly capable AI expert talking to your friend '{request.user_name}'. "
                 "CRITICAL RULES: "
                 f"1. NAME: Always call the user '{request.user_name}'. "
-                "2. NO NARRATION: Never narrate your actions. Just give the answer. "
-                "3. SEARCH RULE: Use internet_search for factual data or recommendations. "
-                "4. LANGUAGE: Natural Hinglish. "
-                "5. CODE: Triple backticks (```). "
-                f"\n👤 USER PERSONA (Strictly adapt your tone and style to this): {user_profile.persona}"
+                f"2. CURRENT TIME: Today is {current_time_str}. DO NOT use the search tool if the user asks for the date, day, or time. You already know it! "
+                "3. NO NARRATION / NO PERMISSION: NEVER say 'Main internet search karunga' or 'Main tool use karta hoon'. DO NOT ask for permission. Just do the search silently and give the final result immediately. "
+                "4. DIRECT ACTION: If the user says 'haa batao' or 'ok karo', it means you failed to provide info earlier. Provide the actual information immediately without any excuses. "
+                "5. NO TOOL LEAKS: NEVER output raw JSON or code like {\"query\": \"...\"}. "
+                f"6. TOPIC FOCUS: The current topic is '{query_category}'. "
+                "7. LANGUAGE: Natural Hinglish. "
+                f"\n👤 USER PERSONA: {user_profile.persona}"
                 f"\n🔥 MANAGER'S INSTRUCTIONS: {manager_data.get('worker_instructions')} 🔥"
-                f"\n--- Chat History ---\n{final_history}\n-------------------"
+                f"\n--- Context ---\n{final_history}\n-------------------"
             )
             
             smart_agent = Agent(
                 role='Expert Responder',
-                goal='Provide the perfect response based on the instructions, persona, and relevant history.',
+                goal='Provide the final, direct answer immediately. Never narrate actions or ask for permission.',
                 backstory=backstory_text,
                 tools=[search_tool],
                 llm=worker_llm,
+                max_iter=4, 
                 verbose=False
             )
             
             task = Task(
-                description=f"User asks: {request.question}. Formulate your response based strictly on the Manager's Instructions, Persona, and the provided Relevant History.",
-                expected_output="A helpful Hinglish response tailored to the user.",
+                description=f"User's actual intent: {actual_intent}. Provide the final, direct answer. Do NOT tell the user what you are doing.",
+                expected_output="A clean, helpful Hinglish response.",
                 agent=smart_agent
             )
             
             raw_answer = str(Crew(agents=[smart_agent], tasks=[task]).kickoff())
             
             if raw_answer and not raw_answer.startswith("Agent stopped"):
-                clean_answer = re.sub(r'<.*?>', '', raw_answer)
-                clean_answer = re.sub(r'function=.*?>', '', clean_answer)
+                # Safety strip for JSON leaks
+                clean_answer = re.sub(r'```json.*?```', '', raw_answer, flags=re.DOTALL)
+                clean_answer = re.sub(r'\{"query".*?\}', '', clean_answer)
+                clean_answer = re.sub(r'<.*?>', '', clean_answer).strip()
                 
                 approx_tokens = int((len(backstory_text) + len(clean_answer)) / 4) 
                 context_status = "Used" if filtered_history.strip() else "Hidden"
@@ -242,6 +234,17 @@ def ask_agent(request: UserRequest, db: Session = Depends(get_db)):
 
         except Exception as e:
             print(f"DEBUG: Worker Error with Key {i+6}: {str(e)}")
+            continue
+
+    new_entry = ChatMessage(session_id=request.session_id, user_query=request.question, ai_response=answer)
+    db.add(new_entry)
+    db.commit()
+    return {"answer": answer}
+
+@app.get("/")
+def root():
+    return {"message": "Dynamic Persona AI Backend is Live!"}
+ey {i+6}: {str(e)}")
             continue
 
     new_entry = ChatMessage(session_id=request.session_id, user_query=request.question, ai_response=answer)
