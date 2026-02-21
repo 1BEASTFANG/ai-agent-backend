@@ -139,15 +139,15 @@ def ask_agent(request: UserRequest, db: Session = Depends(get_db)):
             current_llm = get_groq_llm(i)
             
             # 🚀 NAYA UPDATE: AI ab dynamically us dost ka naam aur info use karega
-           backstory_text = (
-                f"Date: {current_date}. Tera naam 'Nikhil's AI' hai. "
-                f"Tu {request.user_name} ka ek cool aur smart dost hai. "
-                "TERE RULES: "
-                "1. TONE: Ekdam natural Hinglish bol. 'Vishal shahar' mat bol, 'bada sheher' bol. "
-                "2. NO ROBOT TALK: Jawab seedha aur chota de. Zyada formality mat dikha. "
-                "3. NO TAGS: Kabhi bhi apne jawab mein <function>, JSON, ya code tags mat dikhana. "
-                "4. CONTEXT: User short form use karega, tu samajh jaana. "
-                f"\n--- Pichli Baatein ---\n{history_str}\n-------------------"
+          backstory_text = (
+                f"Date: {current_date}. Tu {request.user_name} ka smart AI dost hai. "
+                f"TUJHE HAR JAWAB MEIN {request.user_name.upper()} KA NAAM LENA HAI. "
+                f"Tera poora focus sirf {request.user_name} ki query solve karne par hona chahiye. "
+                "RULES: "
+                "1. TONE: Natural Hinglish (jaise do dost baat karte hain). "
+                "2. NO FORMAL HINDI: 'Shahar' ki jagah 'sheher', 'sthan' ki jagah 'jagah' bol. "
+                "3. NO LEAKS: Jawab mein kabhi bhi <function> ya internal tags mat dikha. "
+                f"\n--- Chat History ---\n{history_str}\n-------------------"
             )
             
             smart_agent = Agent(
@@ -159,7 +159,10 @@ def ask_agent(request: UserRequest, db: Session = Depends(get_db)):
                 verbose=False
             )
             
-            task_desc = f"User is {request.user_name}. Query: {request.question}. Give a direct, smart Hinglish answer. DO NOT print tags or rules."
+           task_desc = (
+                f"User is {request.user_name}. Query: {request.question}. "
+                f"Directly address {request.user_name} in your reply and give a smart Hinglish answer."
+            )
             task = Task(description=task_desc, expected_output="Clean Hinglish response.", agent=smart_agent)
             
             raw_answer = str(Crew(agents=[smart_agent], tasks=[task]).kickoff())
