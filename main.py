@@ -123,24 +123,34 @@ def ask_ai(request: UserRequest, db: Session = Depends(get_db)):
     past = db.query(ChatMessage).filter(ChatMessage.session_id == request.session_id).order_by(ChatMessage.id.desc()).limit(1).all()
     history = "\n".join([f"U: {m.user_query}\nA: {re.sub(r'\[Engine:.*?\]', '', m.ai_response).strip()}" for m in reversed(past)])
 
-    point_rule = "Format response STRICTLY in clean bullet points." if request.is_point_wise else "Use well-structured paragraphs, utilize bullet points only if necessary for clarity."
+    point_rule = "Format response STRICTLY in clean bullet points." if request.is_point_wise else "Use well-structured concise paragraphs."
 
-    # 🌟 FEW-SHOT EXAMPLES (AI Brainwash Data) 🌟
+    # 🌟 EXPANDED FEW-SHOT EXAMPLES (The Ultimate AI Brainwash) 🌟
     few_shot_examples = f"""
     EXAMPLE 1 (Greeting):
     User: "hi" or "hello"
-    Output: "{request.user_name} bhai, namaste! 🌟 Kahiye, aaj main aapki kya madad kar sakta hoon?"
+    Output: "{request.user_name} bhai, namaste! 🌟 Kahiye, main aapki kya madad kar sakta hoon?"
 
-    EXAMPLE 2 (Factual Question):
-    User: "Taj mahal kisne banwaya?"
-    Output: "{request.user_name} ji, Taj Mahal Shah Jahan ne banwaya tha apni begum Mumtaz Mahal ki yaad mein. 🕌 Yeh Agra mein sthit hai."
+    EXAMPLE 2 (Storing a Fact):
+    User: "Mera college ANDC hai"
+    Output: "Done {request.user_name} bhai! 🏫 Maine yaad kar liya hai ki aap ANDC college mein padhte hain."
 
-    EXAMPLE 3 (Coding/Complex Question):
+    EXAMPLE 3 (Recalling a Fact):
+    User: "Mera college kaunsa hai?"
+    Output: "{request.user_name} bhai, aap ANDC college mein padhte hain! 🎓"
+
+    EXAMPLE 4 (Coding Question - STRICT MARKDOWN):
     User: "Python mein loop kaise likhe?"
-    Output: "{request.user_name} bhai, yeh bahut aasaan hai! 🚀 Yahan dekhiye:
-    * **For Loop**: Jab humein counting pata ho.
-    * **While Loop**: Jab condition par rukna ho.
-    Agar code chahiye toh batayega!"
+    Output: "{request.user_name} bhai, yeh raha aapka code:
+    ```python
+    for i in range(5):
+        print(i)
+    ```
+    Is code se aap 0 se 4 tak print kar sakte hain. 🚀"
+
+    EXAMPLE 5 (General Fact):
+    User: "Taj Mahal kahan hai?"
+    Output: "{request.user_name} ji, Taj Mahal Agra, Uttar Pradesh mein sthit hai. 🕌"
     """
 
     # ------------------------------------------
@@ -153,7 +163,7 @@ def ask_ai(request: UserRequest, db: Session = Depends(get_db)):
                 f"### USER'S PAST FACTS ###\n{vector_context}\n\n"
                 f"### RECENT HISTORY ###\n{history}\n\n"
                 f"### USER QUESTION ###\n{request.question}\n\n"
-                f"### RULES ###\n{point_rule}\nAnswer in friendly natural Hinglish. Address user as {request.user_name}."
+                f"### RULES ###\n{point_rule}\nAnswer in friendly natural Hinglish concisely. DO NOT ask follow-up questions. Address user as {request.user_name}."
             )
             response = gemini_client.models.generate_content(model='gemini-1.5-flash', contents=prompt)
             clean_answer = response.text.strip()
@@ -203,7 +213,7 @@ def ask_ai(request: UserRequest, db: Session = Depends(get_db)):
                 wrk_agent = Agent(
                     role='Elite Worker', 
                     goal='Execute the manager\'s plan factually.', 
-                    backstory='Senior AI Researcher. You use tools only when necessary. You do not hallucinate.', 
+                    backstory='Senior AI Researcher. You use tools only when necessary. You ALWAYS put code in ``` markdown blocks.', 
                     llm=create_llm("groq/llama-3.3-70b-versatile", w_key), 
                     tools=[SerperDevTool()],
                     allow_delegation=False,
@@ -213,7 +223,7 @@ def ask_ai(request: UserRequest, db: Session = Depends(get_db)):
                 crt_agent = Agent(
                     role='QA Critic', 
                     goal='Format beautifully matching examples, add empathy.', 
-                    backstory='Friendly Editor. You NEVER print internal logs, word counts, or rule checks. You ONLY speak to the user.', 
+                    backstory='Friendly Editor. You NEVER print internal logs. You PRESERVE code blocks perfectly.', 
                     llm=create_llm("groq/llama-3.1-8b-instant", c_key),
                     allow_delegation=False
                 )
@@ -243,8 +253,8 @@ def ask_ai(request: UserRequest, db: Session = Depends(get_db)):
                         f"INSTRUCTIONS:\n"
                         f"Based on Librarian's summary, write the command for the Worker:\n"
                         f"- If GREETING: Command = 'DO NOT use Search. Say a friendly hello.'\n"
-                        f"- If MEMORY: Command = 'Answer using PAST FACTS only. Keep it short.'\n"
-                        f"- Otherwise: Command = 'Answer factually. Keep it under 200 words. Use web search if necessary.'\n"
+                        f"- If MEMORY: Command = 'Answer using PAST FACTS only. Keep it short. DO NOT ask follow-up questions.'\n"
+                        f"- Otherwise: Command = 'Answer factually concisely. Use web search if necessary. Wrap code in ``` blocks.'\n"
                     ),
                     agent=mgr_agent,
                     context=[t1], 
@@ -256,11 +266,11 @@ def ask_ai(request: UserRequest, db: Session = Depends(get_db)):
                         f"### USER'S PAST FACTS ###\n{vector_context}\n\n"
                         f"### NEW QUESTION ###\n{request.question}\n\n"
                         f"INSTRUCTIONS:\n"
-                        f"Execute the Manager's command exactly. Draft the response. Do not output meta-text. Rely heavily on PAST FACTS if the question is personal."
+                        f"Execute the Manager's command exactly. Draft the response. Do not output meta-text. ALWAYS put code snippets in ``` language ``` markdown blocks."
                     ),
                     agent=wrk_agent,
                     context=[t2], 
-                    expected_output="The raw drafted text containing facts."
+                    expected_output="The raw drafted text containing facts and markdown code blocks."
                 )
                 
                 t4 = Task(
@@ -271,11 +281,13 @@ def ask_ai(request: UserRequest, db: Session = Depends(get_db)):
                         f"2. You must format the Worker's draft EXACTLY in the style of these examples:\n\n"
                         f"{few_shot_examples}\n\n"
                         f"3. {point_rule}\n"
+                        f"4. PRESERVE all markdown code blocks (```) perfectly.\n"
+                        f"5. DO NOT ask repetitive follow-up questions. Be concise.\n"
                         f"OUTPUT ONLY THE FINAL SPOKEN MESSAGE THAT THE USER WILL READ."
                     ),
                     agent=crt_agent,
                     context=[t3], 
-                    expected_output="Only the final, polished Hinglish message meant for the user. No internal logs."
+                    expected_output="Only the final, polished Hinglish message meant for the user. No internal logs. Code must be in markdown."
                 )
 
                 crew = Crew(agents=[lib_agent, mgr_agent, wrk_agent, crt_agent], tasks=[t1, t2, t3, t4], verbose=False)
