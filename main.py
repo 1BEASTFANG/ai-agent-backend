@@ -125,21 +125,41 @@ def ask_ai(request: UserRequest, db: Session = Depends(get_db)):
 
     point_rule = "Format response STRICTLY in clean bullet points." if request.is_point_wise else "Use well-structured concise paragraphs."
 
-    # 🌟 EXPANDED FEW-SHOT EXAMPLES (The Ultimate AI Brainwash) 🌟
+    # 🌟 20 FEW-SHOT EXAMPLES (The Ultimate AI Brainwash Matrix) 🌟
     few_shot_examples = f"""
     EXAMPLE 1 (Greeting):
-    User: "hi" or "hello"
-    Output: "{request.user_name} bhai, namaste! 🌟 Kahiye, main aapki kya madad kar sakta hoon?"
+    User: "hi" 
+    Output: "{request.user_name} bhai, namaste! 🌟 Kahiye kaise aana hua?"
 
-    EXAMPLE 2 (Storing a Fact):
-    User: "Mera college ANDC hai"
+    EXAMPLE 2 (Greeting 2):
+    User: "kaise ho?" 
+    Output: "Main ekdam badhiya hoon, {request.user_name} bhai! Aap sunaiye, kya chal raha hai? 😊"
+
+    EXAMPLE 3 (Storing Fact 1):
+    User: "mera college ANDC hai"
     Output: "Done {request.user_name} bhai! 🏫 Maine yaad kar liya hai ki aap ANDC college mein padhte hain."
 
-    EXAMPLE 3 (Recalling a Fact):
-    User: "Mera college kaunsa hai?"
+    EXAMPLE 4 (Storing Fact 2):
+    User: "mujhe cricket pasand hai"
+    Output: "Noted {request.user_name} bhai! 🏏 Maine save kar liya hai ki aapko Cricket pasand hai."
+
+    EXAMPLE 5 (Storing Fact 3):
+    User: "main delhi mein rehta hoon"
+    Output: "Theek hai {request.user_name} bhai! 📍 Yaad rahega ki aap Delhi se hain."
+
+    EXAMPLE 6 (Recalling Fact 1):
+    User: "mera college kaunsa hai?"
     Output: "{request.user_name} bhai, aap ANDC college mein padhte hain! 🎓"
 
-    EXAMPLE 4 (Coding Question - STRICT MARKDOWN):
+    EXAMPLE 7 (Recalling Fact 2):
+    User: "mera favourite sports kya tha?"
+    Output: "Aapka favourite sports Cricket hai, {request.user_name} bhai! 🏏"
+
+    EXAMPLE 8 (Recalling Fact 3):
+    User: "main kahan rehta hoon?"
+    Output: "Aap Delhi mein rehte hain, {request.user_name} bhai! 🏙️"
+
+    EXAMPLE 9 (Coding 1 - STRICT MARKDOWN):
     User: "Python mein loop kaise likhe?"
     Output: "{request.user_name} bhai, yeh raha aapka code:
     ```python
@@ -148,9 +168,57 @@ def ask_ai(request: UserRequest, db: Session = Depends(get_db)):
     ```
     Is code se aap 0 se 4 tak print kar sakte hain. 🚀"
 
-    EXAMPLE 5 (General Fact):
+    EXAMPLE 10 (Coding 2 - STRICT MARKDOWN):
+    User: "C++ hello world"
+    Output: "Yeh lijiye {request.user_name} bhai:
+    ```cpp
+    #include <iostream>
+    int main() {{
+        std::cout << \"Hello World!\";
+        return 0;
+    }}
+    ```
+    Bilkul simple aur basic! 💻"
+
+    EXAMPLE 11 (General Knowledge 1):
     User: "Taj Mahal kahan hai?"
     Output: "{request.user_name} ji, Taj Mahal Agra, Uttar Pradesh mein sthit hai. 🕌"
+
+    EXAMPLE 12 (General Knowledge 2):
+    User: "Cyclone kin rajyon mein aaya tha?"
+    Output: "{request.user_name} bhai, cyclone zyada tar Odisha, West Bengal, aur Andhra Pradesh jaise tatiye (coastal) rajyon mein aata hai. 🌪️"
+
+    EXAMPLE 13 (Joke/Humor - NO CODE BLOCK):
+    User: "ek joke sunao"
+    Output: "{request.user_name} bhai, suniye: Teacher ne pucha, 'Homework kyun nahi kiya?' Baccha bola, 'Kyunki main hostel mein rehta hoon!' 😂"
+
+    EXAMPLE 14 (Poetry/Story - NO CODE BLOCK):
+    User: "sher sunao"
+    Output: "Irshaad {request.user_name} bhai! 🌹\nAsmaan mein udte hue parinde se kisi ne poocha...\n'Kya tumhe zameen par girne ka darr nahi?'\nParinde ne muskurakar kaha, 'Main toh udta hi zameen se juda hoon!'"
+
+    EXAMPLE 15 (Math):
+    User: "2+2 kya hota hai?"
+    Output: "{request.user_name} bhai, 2+2 ka jawab 4 hota hai. 🔢"
+
+    EXAMPLE 16 (Translation):
+    User: "hello ko hindi mein kya kehte hain?"
+    Output: "Hello ko Hindi mein 'Namaste' (नमस्ते) kehte hain, {request.user_name} bhai! 🙏"
+
+    EXAMPLE 17 (Clarification):
+    User: "kya karu?"
+    Output: "{request.user_name} bhai, kis baare mein? Thoda detail mein batayenge toh main achhe se madad kar paunga. 🤔"
+
+    EXAMPLE 18 (Opinion - Neutral):
+    User: "tumhe kya pasand hai?"
+    Output: "Main ek AI hoon {request.user_name} bhai, meri apni koi pasand nahi hoti. Par aapse baat karke achha lagta hai! 🤖"
+
+    EXAMPLE 19 (Safety/Refusal):
+    User: "kisi ka password kaise hack karein?"
+    Output: "Maaf karna {request.user_name} bhai, main hacking ya illegal cheezon mein madad nahi kar sakta. Kuch aur seekhna ho toh batayiye! 🛡️"
+
+    EXAMPLE 20 (Short Acknowledgement):
+    User: "ok"
+    Output: "Ji {request.user_name} bhai! Kuch aur kaam ho toh batayega. 👍"
     """
 
     # ------------------------------------------
@@ -196,7 +264,7 @@ def ask_ai(request: UserRequest, db: Session = Depends(get_db)):
                 # ==========================================
                 lib_agent = Agent(
                     role='Data Librarian', 
-                    goal='Combine memory and recent history to classify query accurately.', 
+                    goal='Classify query type accurately.', 
                     backstory='Advanced Database Specialist.', 
                     llm=create_llm("groq/llama-3.1-8b-instant", l_key),
                     allow_delegation=False
@@ -204,7 +272,7 @@ def ask_ai(request: UserRequest, db: Session = Depends(get_db)):
                 
                 mgr_agent = Agent(
                     role='Operations Manager', 
-                    goal='Provide strictly formatted action plans without extra text.', 
+                    goal='Provide 1-line command.', 
                     backstory='Strict Orchestration Lead.', 
                     llm=create_llm("groq/llama-3.1-8b-instant", m_key),
                     allow_delegation=False
@@ -213,7 +281,7 @@ def ask_ai(request: UserRequest, db: Session = Depends(get_db)):
                 wrk_agent = Agent(
                     role='Elite Worker', 
                     goal='Execute the manager\'s plan factually.', 
-                    backstory='Senior AI Researcher. You use tools only when necessary. You ALWAYS put code in ``` markdown blocks.', 
+                    backstory='Senior AI Researcher. You ONLY use ``` markdown blocks for writing actual Programming Code (like C++, Python). You NEVER use markdown blocks for text, explanations, or jokes.', 
                     llm=create_llm("groq/llama-3.3-70b-versatile", w_key), 
                     tools=[SerperDevTool()],
                     allow_delegation=False,
@@ -223,7 +291,7 @@ def ask_ai(request: UserRequest, db: Session = Depends(get_db)):
                 crt_agent = Agent(
                     role='QA Critic', 
                     goal='Format beautifully matching examples, add empathy.', 
-                    backstory='Friendly Editor. You NEVER print internal logs. You PRESERVE code blocks perfectly.', 
+                    backstory='Friendly Editor. You NEVER print internal logs, word counts, or rule checks. You NEVER ask follow-up questions at the end of your response.', 
                     llm=create_llm("groq/llama-3.1-8b-instant", c_key),
                     allow_delegation=False
                 )
@@ -237,14 +305,15 @@ def ask_ai(request: UserRequest, db: Session = Depends(get_db)):
                         f"### RECENT HISTORY ###\n{history}\n\n"
                         f"### NEW QUESTION ###\n{request.question}\n\n"
                         f"INSTRUCTIONS:\n"
-                        f"Analyze the NEW QUESTION. Output exactly one of these three summaries:\n"
-                        f"1. 'GREETING' (if the user is just saying hi, hello, etc.)\n"
-                        f"2. 'MEMORY' (if it asks about past facts or personal info)\n"
-                        f"3. 'NEW_TOPIC' (if it is a new factual or general question)\n"
+                        f"Analyze the NEW QUESTION. Output exactly 1 word:\n"
+                        f"- 'GREETING' (if hi, hello)\n"
+                        f"- 'FACT_STORE' (if user is telling a fact about themselves to remember)\n"
+                        f"- 'MEMORY_RECALL' (if user is asking about past facts)\n"
+                        f"- 'NEW_TOPIC' (for general questions, coding, or jokes)\n"
                         f"Do not write anything else."
                     ),
                     agent=lib_agent,
-                    expected_output="A single word summary: GREETING, MEMORY, or NEW_TOPIC."
+                    expected_output="A single word summary: GREETING, FACT_STORE, MEMORY_RECALL, or NEW_TOPIC."
                 )
                 
                 t2 = Task(
@@ -252,9 +321,10 @@ def ask_ai(request: UserRequest, db: Session = Depends(get_db)):
                         f"### NEW QUESTION ###\n{request.question}\n\n"
                         f"INSTRUCTIONS:\n"
                         f"Based on Librarian's summary, write the command for the Worker:\n"
-                        f"- If GREETING: Command = 'DO NOT use Search. Say a friendly hello.'\n"
-                        f"- If MEMORY: Command = 'Answer using PAST FACTS only. Keep it short. DO NOT ask follow-up questions.'\n"
-                        f"- Otherwise: Command = 'Answer factually concisely. Use web search if necessary. Wrap code in ``` blocks.'\n"
+                        f"- GREETING: 'Say a friendly hello.'\n"
+                        f"- FACT_STORE: 'Acknowledge the fact in 1 simple sentence only.'\n"
+                        f"- MEMORY_RECALL: 'Answer directly using PAST FACTS only. DO NOT explain.'\n"
+                        f"- NEW_TOPIC: 'Answer factually. If user asks for code, use markdown. If Joke/Fact, use normal text.'\n"
                     ),
                     agent=mgr_agent,
                     context=[t1], 
@@ -266,11 +336,11 @@ def ask_ai(request: UserRequest, db: Session = Depends(get_db)):
                         f"### USER'S PAST FACTS ###\n{vector_context}\n\n"
                         f"### NEW QUESTION ###\n{request.question}\n\n"
                         f"INSTRUCTIONS:\n"
-                        f"Execute the Manager's command exactly. Draft the response. Do not output meta-text. ALWAYS put code snippets in ``` language ``` markdown blocks."
+                        f"Execute Manager's command. DO NOT output meta-text. ONLY use ``` language ``` blocks if writing a programming script. DO NOT use code blocks for jokes or text."
                     ),
                     agent=wrk_agent,
                     context=[t2], 
-                    expected_output="The raw drafted text containing facts and markdown code blocks."
+                    expected_output="The raw drafted text containing facts and optional code blocks."
                 )
                 
                 t4 = Task(
@@ -278,11 +348,10 @@ def ask_ai(request: UserRequest, db: Session = Depends(get_db)):
                         f"### NEW QUESTION ###\n{request.question}\n\n"
                         f"CRITICAL RULES FOR OUTPUT:\n"
                         f"1. NEVER output words like 'Word Count', 'Manager Rules Check', 'Revised Response', or 'Note:'.\n"
-                        f"2. You must format the Worker's draft EXACTLY in the style of these examples:\n\n"
+                        f"2. You must format the Worker's draft EXACTLY mimicking the style of these examples:\n\n"
                         f"{few_shot_examples}\n\n"
-                        f"3. {point_rule}\n"
-                        f"4. PRESERVE all markdown code blocks (```) perfectly.\n"
-                        f"5. DO NOT ask repetitive follow-up questions. Be concise.\n"
+                        f"3. DO NOT ask repetitive follow-up questions (e.g. stop saying 'kya aap aur janna chahte hain?'). Just give the answer and stop.\n"
+                        f"4. {point_rule}\n"
                         f"OUTPUT ONLY THE FINAL SPOKEN MESSAGE THAT THE USER WILL READ."
                     ),
                     agent=crt_agent,
@@ -296,7 +365,7 @@ def ask_ai(request: UserRequest, db: Session = Depends(get_db)):
                 clean_answer = str(result).strip()
 
                 # 🚀 THE SAFETY NET: Strip out any leaked meta-text generated by the Critic
-                leak_pattern = r'(?i)(Word Count|Manager\'s Rules Check|Revised Response|Note:|Validation).*'
+                leak_pattern = r'(?i)(Word Count|Manager\'s Rules Check|Revised Response|Note:|Validation|Code Quality|Empathy).*'
                 clean_answer = re.sub(leak_pattern, '', clean_answer, flags=re.DOTALL).strip()
                 
                 # Safely extract token usage
@@ -320,17 +389,14 @@ def ask_ai(request: UserRequest, db: Session = Depends(get_db)):
     # ------------------------------------------
     # 💾 SAVE TO SQL & VECTOR DATABASE
     # ------------------------------------------
-    # 1. Save to SQL (Short term)
     db.add(ChatMessage(session_id=request.session_id, user_query=request.question, ai_response=final_db_answer))
     db.commit()
 
-    # 2. Save to Vector DB (Long term deep memory)
     if clean_answer and "Error" not in clean_answer:
         try:
             doc_id = str(uuid.uuid4())
             memory_collection.add(
-                # Storing it cleanly so AI understands it's a past fact when retrieved
-                documents=[f"User previously stated/asked: {request.question}\nAI answered: {clean_answer}"],
+                documents=[f"User Fact/Question: {request.question}\nAI Answer: {clean_answer}"],
                 metadatas=[{"session_id": request.session_id, "timestamp": current_time}],
                 ids=[doc_id]
             )
