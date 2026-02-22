@@ -1,7 +1,9 @@
 import os
 import re
+import uuid
 import traceback
 import logging
+import chromadb # 🚀 NEW: Vector Database
 from google import genai 
 from datetime import datetime
 from fastapi import FastAPI, Depends
@@ -22,6 +24,7 @@ os.environ["OTEL_SDK_DISABLED"] = "true"
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
+# --- SQL DATABASE SETUP (Short-Term Memory) ---
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./ultimate_stable_v5.db")
 engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False} if "sqlite" in DATABASE_URL else {})
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
@@ -42,6 +45,18 @@ def get_db():
     try: yield db
     finally: db.close()
 
+# ==========================================
+# 🧠 2. VECTOR DATABASE SETUP (Long-Term Memory)
+# ==========================================
+# ChromaDB folder banayega server par jahan vector data save hoga
+CHROMA_PATH = "./chroma_memory_db"
+chroma_client = chromadb.PersistentClient(path=CHROMA_PATH)
+# Collection (Table) for storing AI interactions
+memory_collection = chroma_client.get_or_create_collection(name="ai_long_term_memory")
+
+# ==========================================
+# ⚡ 3. ENGINES & KEYS
+# ==========================================
 gemini_api_key = os.getenv("GEMINI_API_KEY", "").strip()
 gemini_client = None
 if gemini_api_key:
@@ -65,80 +80,89 @@ class UserRequest(BaseModel):
     is_point_wise: bool = False 
 
 # ==========================================
-# 🧠 4. CORE API ENDPOINT (Few-Shot Pipeline)
+# 🚀 4. CORE API ENDPOINT (Vector + Multi-Agent)
 # ==========================================
 @app.post("/ask")
 def ask_ai(request: UserRequest, db: Session = Depends(get_db)):
     current_time = datetime.now().strftime("%A, %d %B %Y, %I:%M %p")
-    answer = f"{request.user_name} bhai, server mein kuch technical locha hai. Thodi der baad try karo."
+    final_db_answer = f"{request.user_name} bhai, server mein kuch technical locha hai."
     
-    past = db.query(ChatMessage).filter(ChatMessage.session_id == request.session_id).order_by(ChatMessage.id.desc()).limit(2).all()
+    # ------------------------------------------
+    # 🔍 RAG: RETRIEVE FROM VECTOR DATABASE
+    # ------------------------------------------
+    vector_context = "No relevant past memory found."
+    try:
+        # User ke current sawal se milti-julti purani baatein dhoondo
+        results = memory_collection.query(
+            query_texts=[request.question],
+            n_results=2, # Sirf top 2 most relevant memories lao
+            where={"session_id": request.session_id} # Sirf is user ki memory
+        )
+        if results and results['documents'] and results['documents'][0]:
+            vector_context = "\n---\n".join(results['documents'][0])
+            logger.info("Vector DB Successfully Retrieved Context!")
+    except Exception as e:
+        logger.error(f"Vector DB Retrieve Error: {str(e)}")
+
+    # Short-term SQL History (just for immediate continuity)
+    past = db.query(ChatMessage).filter(ChatMessage.session_id == request.session_id).order_by(ChatMessage.id.desc()).limit(1).all()
     history = "\n".join([f"U: {m.user_query}\nA: {re.sub(r'\[Engine:.*?\]', '', m.ai_response).strip()}" for m in reversed(past)])
 
     point_rule = "Format strictly in clean bullet points." if request.is_point_wise else "Use well-structured paragraphs. Use points only if necessary."
 
-    # 🌟 FEW-SHOT EXAMPLES (AI Ka Brainwash Data) 🌟
+    # 🌟 FEW-SHOT EXAMPLES 🌟
     few_shot_examples = f"""
-    EXAMPLE 1 (Greeting):
-    User: "hi" or "hello"
+    EXAMPLE 1:
+    User: "hi"
     Output: "{request.user_name} bhai, namaste! 🌟 Kahiye, aaj main aapki kya madad kar sakta hoon?"
 
-    EXAMPLE 2 (Factual Question):
-    User: "Taj mahal kisne banwaya?"
-    Output: "{request.user_name} ji, Taj Mahal Shah Jahan ne banwaya tha apni begum Mumtaz Mahal ki yaad mein. 🕌 Yeh Agra mein sthit hai."
-
-    EXAMPLE 3 (Coding/Complex Question):
-    User: "Python mein loop kaise likhe?"
-    Output: "{request.user_name} bhai, yeh bahut aasaan hai! 🚀 Yahan dekhiye:
-    * **For Loop**: Jab humein counting pata ho.
-    * **While Loop**: Jab condition par rukna ho.
-    Agar code chahiye toh batayega!"
+    EXAMPLE 2:
+    User: "Delhi kahan hai?"
+    Output: "{request.user_name} ji, Delhi India ke north mein sthit hai. Yeh Yamuna nadi ke kinare basi hui desh ki rajdhani hai. 📍"
     """
 
     if request.engine_choice == "gemini_native":
         try:
-            logger.info(f"Routing request to Gemini for user: {request.user_name}")
             prompt = (
-                f"### HISTORY ###\n{history}\n\n"
+                f"### DEEP MEMORY ###\n{vector_context}\n\n"
+                f"### RECENT HISTORY ###\n{history}\n\n"
                 f"### USER QUESTION ###\n{request.question}\n\n"
-                f"### RULES ###\n{point_rule}\nAnswer in friendly natural Hinglish. Address user as {request.user_name}."
+                f"### RULES ###\n{point_rule}\nAnswer in friendly Hinglish. Address user as {request.user_name}."
             )
             response = gemini_client.models.generate_content(model='gemini-1.5-flash', contents=prompt)
-            answer = f"{response.text.strip()}\n\n[Engine: Native Gemini ⚡]"
+            clean_answer = response.text.strip()
+            final_db_answer = f"{clean_answer}\n\n[Engine: Native Gemini ⚡ | Vector DB 🧠]"
         except Exception as e:
-            logger.error(f"Gemini Engine Failed: {str(e)}")
-            answer = f"Gemini Error: {str(e)}"
+            clean_answer = "Error occurred."
+            final_db_answer = f"Gemini Error: {str(e)}"
 
     else:
         logger.info(f"Initiating Enterprise Groq Pipeline for user: {request.user_name}")
         lib_keys, mgr_keys, wrk_keys = get_groq_keys("librarian"), get_groq_keys("manager"), get_groq_keys("worker")
         
+        clean_answer = ""
         success = False
         for i in range(len(wrk_keys)):
             try:
-                l_idx = (i % len(lib_keys)) + 1
-                m_idx = (i % len(mgr_keys)) + 1
-                w_idx = i + 1
-                c_idx = ((i + 1) % len(mgr_keys)) + 1
-                
+                l_idx, m_idx, w_idx, c_idx = (i % len(lib_keys)) + 1, (i % len(mgr_keys)) + 1, i + 1, ((i + 1) % len(mgr_keys)) + 1
                 l_key, m_key = lib_keys[l_idx - 1], mgr_keys[m_idx - 1]
                 w_key, c_key = wrk_keys[w_idx - 1], mgr_keys[c_idx - 1] 
 
                 key_tracker = f"L:{l_idx} | M:{m_idx} | W:{w_idx} | C:{c_idx}"
-                logger.info(f"Attempt {i+1} using Keys: {key_tracker}")
 
-                lib_agent = Agent(role='Data Librarian', goal='Determine if query is GREETING, CONTINUATION, or NEW_TOPIC.', backstory='Analytical AI.', llm=create_llm("groq/llama-3.1-8b-instant", l_key), allow_delegation=False)
+                lib_agent = Agent(role='Data Librarian', goal='Combine deep memory and recent history to classify query.', backstory='Analytical AI.', llm=create_llm("groq/llama-3.1-8b-instant", l_key), allow_delegation=False)
                 mgr_agent = Agent(role='Operations Manager', goal='Provide strictly formatted action plans.', backstory='Strict Orchestrator.', llm=create_llm("groq/llama-3.1-8b-instant", m_key), allow_delegation=False)
-                wrk_agent = Agent(role='Elite Worker', goal='Execute plan directly without hallucination.', backstory='Senior AI Researcher. Uses tools ONLY if instructed.', llm=create_llm("groq/llama-3.3-70b-versatile", w_key), tools=[SerperDevTool()], allow_delegation=False, max_iter=3)
-                crt_agent = Agent(role='QA Critic', goal='Format final response matching the exact examples.', backstory='Strict formatting engine.', llm=create_llm("groq/llama-3.1-8b-instant", c_key), allow_delegation=False)
+                wrk_agent = Agent(role='Elite Worker', goal='Execute plan without hallucination.', backstory='Senior AI Researcher.', llm=create_llm("groq/llama-3.3-70b-versatile", w_key), tools=[SerperDevTool()], allow_delegation=False, max_iter=3)
+                crt_agent = Agent(role='QA Critic', goal='Format final response matching examples exactly.', backstory='Strict formatting engine.', llm=create_llm("groq/llama-3.1-8b-instant", c_key), allow_delegation=False)
 
+                # 🚀 VECTOR CONTEXT INJECTED HERE
                 t1 = Task(
-                    description=f"### HISTORY ###\n{history}\n\n### NEW QUESTION ###\n{request.question}\n\nAnalyze NEW QUESTION. Output exactly ONE word: 'GREETING', 'CONTINUATION', or 'NEW_TOPIC'.",
+                    description=f"### DEEP MEMORY ###\n{vector_context}\n\n### RECENT HISTORY ###\n{history}\n\n### NEW QUESTION ###\n{request.question}\n\nAnalyze NEW QUESTION. Output exactly ONE word: 'GREETING', 'CONTINUATION', or 'NEW_TOPIC'.",
                     agent=lib_agent, expected_output="A single word summary."
                 )
                 
                 t2 = Task(
-                    description=f"### NEW QUESTION ###\n{request.question}\n\nIf Librarian summary is GREETING: Command = 'NO SEARCH. Friendly hello.' Otherwise: Command = 'Answer factually under 200 words. Use search if needed.'",
+                    description=f"### NEW QUESTION ###\n{request.question}\n\nIf Librarian summary is GREETING: Command = 'NO SEARCH. Friendly hello.' Otherwise: Command = 'Answer factually under 200 words using Deep Memory if relevant. Use search if needed.'",
                     agent=mgr_agent, context=[t1], expected_output="1-line command."
                 )
                 
@@ -147,39 +171,56 @@ def ask_ai(request: UserRequest, db: Session = Depends(get_db)):
                     agent=wrk_agent, context=[t2], expected_output="Raw drafted text."
                 )
                 
-                # 🌟 THE MAGIC: Injecting Few-Shot Examples here 🌟
                 t4 = Task(
                     description=(
                         f"### NEW QUESTION ###\n{request.question}\n\n"
-                        f"CRITICAL INSTRUCTION: You must format the Worker's draft EXACTLY in the style of these examples. Do NOT output internal thoughts like 'Word Count' or 'Revised'.\n\n"
+                        f"CRITICAL INSTRUCTION: Format Worker's draft EXACTLY in the style of these examples. DO NOT output internal thoughts like 'Word Count'.\n\n"
                         f"{few_shot_examples}\n\n"
-                        f"Now, based on the Worker's draft, write the final response. {point_rule}"
+                        f"Now write the final response. {point_rule}"
                     ),
-                    agent=crt_agent,
-                    context=[t3], 
-                    expected_output="Final, clean Hinglish message matching the example style. NO internal logs."
+                    agent=crt_agent, context=[t3], expected_output="Final, clean Hinglish message. NO internal logs."
                 )
 
                 crew = Crew(agents=[lib_agent, mgr_agent, wrk_agent, crt_agent], tasks=[t1, t2, t3, t4], verbose=False)
                 result = crew.kickoff()
                 
+                clean_answer = str(result).strip()
+                
                 token_usage = "N/A"
                 try:
                     if hasattr(crew, 'usage_metrics') and crew.usage_metrics:
                         token_usage = crew.usage_metrics.total_tokens
-                except Exception as e:
-                    logger.warning(f"Could not parse tokens: {str(e)}")
+                except Exception: pass
 
-                answer = f"{str(result).strip()}\n\n[Engine: Enterprise Groq 🤖 | Total Tokens: {token_usage} | Keys: {key_tracker}]"
+                final_db_answer = f"{clean_answer}\n\n[Engine: Enterprise Groq 🤖 | Total Tokens: {token_usage} | Keys: {key_tracker} | Vector DB 🧠]"
                 success = True
                 break 
                 
             except Exception as e:
-                logger.error(f"Groq Loop Failed on attempt {i+1}: {traceback.format_exc()}")
+                logger.error(f"Groq Loop Failed on attempt {i+1}: {str(e)}")
                 if i == len(wrk_keys) - 1:
-                    answer = f"{request.user_name} bhai, Groq ki saari keys ki limit exhaust ho gayi hai. Kripya Gemini mode try karein."
+                    final_db_answer = f"{request.user_name} bhai, Groq ki saari keys ki limit exhaust ho gayi hai."
                 continue
 
-    db.add(ChatMessage(session_id=request.session_id, user_query=request.question, ai_response=answer))
+    # ------------------------------------------
+    # 💾 SAVE TO SQL & VECTOR DATABASE
+    # ------------------------------------------
+    # 1. Save to SQL (Short term)
+    db.add(ChatMessage(session_id=request.session_id, user_query=request.question, ai_response=final_db_answer))
     db.commit()
-    return {"answer": answer}
+
+    # 2. Save to Vector DB (Long term deep memory)
+    # We only save the clean answer, not the "[Engine...]" tags, to keep DB pure!
+    if clean_answer and "Error" not in clean_answer:
+        try:
+            doc_id = str(uuid.uuid4()) # Generate unique ID
+            memory_collection.add(
+                documents=[f"User asked: {request.question}\nAI answered: {clean_answer}"],
+                metadatas=[{"session_id": request.session_id, "timestamp": current_time}],
+                ids=[doc_id]
+            )
+            logger.info("Successfully Saved to Vector DB!")
+        except Exception as e:
+            logger.error(f"Vector DB Save Error: {str(e)}")
+
+    return {"answer": final_db_answer}
