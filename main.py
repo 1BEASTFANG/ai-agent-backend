@@ -2,7 +2,8 @@ import os
 import re
 import json
 import traceback
-import google.generativeai as genai
+# 🚀 FIXED 1: Naya Google GenAI import (Deprecation warning hatane ke liye)
+from google import genai 
 from datetime import datetime
 from fastapi import FastAPI, Depends
 from pydantic import BaseModel
@@ -39,11 +40,12 @@ def get_db():
     try: yield db
     finally: db.close()
 
-# --- ENGINE 2: NATIVE GEMINI SETUP ---
+# --- ENGINE 2: NATIVE GEMINI SETUP (UPDATED) ---
 gemini_api_key = os.getenv("GEMINI_API_KEY", "").strip()
+gemini_client = None
 if gemini_api_key:
-    genai.configure(api_key=gemini_api_key)
-    native_gemini = genai.GenerativeModel('gemini-1.5-pro')
+    # 🚀 FIXED 2: Naye SDK ke hisab se Client initialization
+    gemini_client = genai.Client(api_key=gemini_api_key)
 
 # --- ENGINE 1: GROQ KEY FACTORY ---
 def get_groq_llm(role="worker", index=0):
@@ -55,7 +57,8 @@ def get_groq_llm(role="worker", index=0):
         model = "groq/llama-3.1-8b-instant"
     else: 
         start, end = 11, 51
-        model = "groq/llama-3.3-70b-versatile"
+        # 🚀 FIXED 3: Heavy model (70b) hata kar fast model lagaya taaki Rate Limit hit na ho
+        model = "groq/llama-3.1-8b-instant"
 
     keys = [os.getenv(f"GROQ_API_KEY_{i}", "").strip() for i in range(start, end)]
     valid = [k for k in keys if k]
@@ -68,7 +71,6 @@ class UserRequest(BaseModel):
     user_name: str
     question: str
     engine_choice: str = "gemini_native"
-    # 🚀 NAYA: Point-wise mode ka flag
     is_point_wise: bool = False 
 
 # ==========================================
@@ -88,7 +90,7 @@ def ask_ai(request: UserRequest, db: Session = Depends(get_db)):
         point_style = "STRICT RULE: Provide the entire response ONLY in bullet points. Do not use long paragraphs."
 
     # ------------------------------------------
-    # ⚡ ENGINE 2: PURE NATIVE GEMINI
+    # ⚡ ENGINE 2: PURE NATIVE GEMINI (UPDATED)
     # ------------------------------------------
     if request.engine_choice == "gemini_native":
         prompt = f"""
@@ -99,7 +101,14 @@ def ask_ai(request: UserRequest, db: Session = Depends(get_db)):
         Answer in natural Hinglish directly.
         """
         try:
-            response = native_gemini.generate_content(prompt)
+            if not gemini_client:
+                raise ValueError("Gemini API Key missing in environment!")
+            
+            # 🚀 FIXED 4: Naye SDK ka Text Generation syntax
+            response = gemini_client.models.generate_content(
+                model='gemini-1.5-pro',
+                contents=prompt
+            )
             answer = f"{response.text.strip()}\n\n[Engine: Native Gemini ⚡]"
         except Exception as e:
             answer = f"Gemini Engine Error: {str(e)}"
@@ -118,7 +127,6 @@ def ask_ai(request: UserRequest, db: Session = Depends(get_db)):
             t2 = Task(description=f"Plan Hinglish response for: {request.question}", agent=mgr_agent, expected_output="Strategy.")
             t3 = Task(description=f"Execute search and write draft.", agent=wrk_agent, expected_output="Draft answer.")
             
-            # 🚀 Critic Task mein point-wise check daal diya
             final_task_desc = f"Review and polish. {point_style} Remove narration."
             t4 = Task(description=final_task_desc, agent=crt_agent, expected_output="Final clean text.")
 
