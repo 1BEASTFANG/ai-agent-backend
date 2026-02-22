@@ -1,22 +1,26 @@
 import os
 import re
 import json
+import traceback
+import google.generativeai as genai
 from datetime import datetime
-from fastapi import FastAPI, Depends
+from fastapi import FastAPI, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy import create_engine, Column, Integer, Text, String
 from sqlalchemy.orm import sessionmaker, Session
 from sqlalchemy.ext.declarative import declarative_base
+
+# CrewAI Imports (Sirf Groq ke liye use honge)
 from crewai import Agent, Task, Crew, LLM
 from crewai.tools import BaseTool
 from crewai_tools import SerperDevTool
 
-# 🚀 FIX: CrewAI settings
+# 🚀 Settings for Stability
 os.environ["CREWAI_TRACING_ENABLED"] = "False"
 os.environ["OTEL_SDK_DISABLED"] = "true"
 
 # --- DATABASE SETUP ---
-DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./chat_history_v4.db")
+DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./ultimate_dual_engine.db")
 if DATABASE_URL.startswith("postgres://"):
     DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
 
@@ -27,15 +31,9 @@ Base = declarative_base()
 class ChatMessage(Base):
     __tablename__ = "messages"
     id = Column(Integer, primary_key=True, index=True)
-    session_id = Column(String, index=True, default="default_user")
+    session_id = Column(String, index=True)
     user_query = Column(Text)
     ai_response = Column(Text)
-
-class UserProfile(Base):
-    __tablename__ = "user_profiles"
-    id = Column(Integer, primary_key=True, index=True)
-    user_name = Column(String, unique=True, index=True)
-    persona = Column(Text, default="A friendly user. Adjust tone over time.")
 
 Base.metadata.create_all(bind=engine)
 app = FastAPI()
@@ -45,134 +43,136 @@ def get_db():
     try: yield db
     finally: db.close()
 
-# --- SEARCH TOOL ---
-class MySearchTool(BaseTool):
-    name: str = "internet_search"
-    description: str = "Use this for real-time factual info from the web like news or prices."
-    def _run(self, query: str) -> str:
-        return SerperDevTool().run(search_query=str(query))
+# --- NATIVE GEMINI SETUP (No CrewAI here) ---
+gemini_api_key = os.getenv("GEMINI_API_KEY", "").strip()
+if gemini_api_key:
+    genai.configure(api_key=gemini_api_key)
+    # Using the robust pro model
+    native_gemini_model = genai.GenerativeModel('gemini-1.5-pro')
+else:
+    print("WARNING: GEMINI_API_KEY is missing!")
 
-search_tool = MySearchTool()
+# --- GROQ CREWAI SETUP (For Engine 2) ---
+search_tool = SerperDevTool()
 
-# ==========================================
-# 🚀 THE LLM POOLS (Hybrid Setup)
-# ==========================================
+def get_groq_llm(model_type="worker", index=0):
+    # Librarian uses keys 1-5, Worker uses keys 6-50
+    start, end = (1, 6) if model_type == "librarian" else (6, 51)
+    keys = [os.getenv(f"GROQ_API_KEY_{i}", "").strip() for i in range(start, end)]
+    valid_keys = [k for k in keys if k]
+    
+    if not valid_keys:
+        raise ValueError(f"No valid Groq keys found for {model_type}!")
+        
+    actual_key = valid_keys[index % len(valid_keys)]
+    model_name = "groq/llama-3.1-8b-instant" if model_type == "librarian" else "groq/llama-3.3-70b-versatile"
+    
+    return LLM(model=model_name, api_key=actual_key, temperature=0.3)
 
-# 🧠 PREMIUM (Gemini 1.5 Pro) - Manager aur Critic ke liye
-def get_premium_llm():
-    key = os.getenv("GEMINI_API_KEY", "").strip()
-    if not key: raise ValueError("GEMINI_API_KEY missing!")
-    return LLM(model="gemini/gemini-1.5-pro", api_key=key, temperature=0.2)
-
-# 📚 LIBRARIAN (Groq 8B) - Keys 1 to 5
-def get_librarian_llm(index):
-    keys = [os.getenv(f"GROQ_API_KEY_{i}", "").strip() for i in range(1, 6)]
-    valid = [k for k in keys if k]
-    return LLM(model="groq/llama-3.1-8b-instant", api_key=valid[index % len(valid) if valid else 0], temperature=0.1)
-
-# 👷 WORKER (Groq 70B) - Keys 6 to 50
-def get_worker_llm(index):
-    keys = [os.getenv(f"GROQ_API_KEY_{i}", "").strip() for i in range(6, 51)]
-    valid = [k for k in keys if k]
-    return LLM(model="groq/llama-3.3-70b-versatile", api_key=valid[index % len(valid) if valid else 0], temperature=0.3)
-
+# --- REQUEST MODEL ---
 class UserRequest(BaseModel):
     session_id: str
     user_name: str
     question: str
+    engine_choice: str = "gemini_native"  # Default is Gemini (Fast & Stable)
 
-def extract_json(response_text):
-    start = response_text.find('{')
-    end = response_text.rfind('}')
-    if start != -1 and end != -1:
-        try: return json.loads(response_text[start:end+1])
-        except: return None
-    return None
-
-# --- MAIN API ENDPOINT ---
+# ==========================================
+# 🚀 MAIN API ENDPOINT
+# ==========================================
 @app.post("/ask")
-def ask_agent(request: UserRequest, db: Session = Depends(get_db)):
-    past_messages = db.query(ChatMessage).filter(ChatMessage.session_id == request.session_id).order_by(ChatMessage.id.desc()).limit(10).all()
-    user_profile = db.query(UserProfile).filter(UserProfile.user_name == request.user_name).first() or UserProfile(user_name=request.user_name)
+def ask_ai(request: UserRequest, db: Session = Depends(get_db)):
+    current_time = datetime.now().strftime("%A, %d %B %Y, %I:%M %p")
     
+    # 1. Fetch Chat History
+    past_msgs = db.query(ChatMessage).filter(ChatMessage.session_id == request.session_id).order_by(ChatMessage.id.desc()).limit(6).all()
     history_str = ""
-    if past_messages:
-        for i, m in enumerate(reversed(past_messages)):
-            clean_resp = re.sub(r'<.*?>', '', m.ai_response).split('\n\n[')[0].strip()
-            history_str += f"[{i+1}] User: {m.user_query}\nAgent: {clean_resp}\n"
+    if past_msgs:
+        for m in reversed(past_msgs):
+            # Clean HTML or backend tags from history
+            clean_ai = re.sub(r'\[Engine:.*?\]', '', m.ai_response).strip()
+            history_str += f"User: {m.user_query}\nAI: {clean_ai}\n\n"
 
-    current_time_str = datetime.now().strftime("%A, %d %B %Y, %I:%M %p")
+    answer = ""
 
-    # 📚 PHASE 1: LIBRARIAN (Groq 8B - Context Filtering)
-    librarian_prompt = f"Time: {current_time_str}\nHistory:\n{history_str}\nQuery: {request.question}\nTask: Extract related context. Return JSON: {{'relevant_history': 'string'}}"
-    librarian_data = {"relevant_history": ""}
-    try:
-        lib_res = str(get_librarian_llm(0).call(messages=[{"role": "user", "content": librarian_prompt}]))
-        parsed = extract_json(lib_res)
-        if parsed: librarian_data = parsed
-    except: pass
+    # ==========================================
+    # ⚡ ENGINE 1: NATIVE GEMINI (100% Stable)
+    # ==========================================
+    if request.engine_choice == "gemini_native":
+        if not gemini_api_key:
+            return {"answer": "Bhai, Gemini API Key missing hai server par!"}
+            
+        # Create a direct, powerful prompt
+        prompt = f"""
+        You are an expert AI assistant helping '{request.user_name}'.
+        Current Date and Time: {current_time}.
+        
+        CRITICAL RULES:
+        1. Answer in natural Hinglish (mix of Hindi and English).
+        2. Be direct. Do not say "I am thinking" or "Here is the answer".
+        3. Use the context below if it relates to the user's question.
+        
+        --- Past Conversation Context ---
+        {history_str if history_str else "No past context. This is a new conversation."}
+        ---------------------------------
+        
+        User's New Question: {request.question}
+        """
+        
+        try:
+            response = native_gemini_model.generate_content(prompt)
+            answer = f"{response.text.strip()}\n\n[Engine: Native Gemini ⚡]"
+        except Exception as e:
+            print(f"Gemini Native Error: {e}")
+            answer = f"Bhai, Gemini server par kuch issue aaya hai: {str(e)}"
 
-    # 👔 PHASE 2: MANAGER (Gemini 1.5 Pro - Strategy)
-    manager_prompt = f"""
-    Analyze the user intent like a senior strategist.
-    Current Time: {current_time_str}
-    Context: {librarian_data['relevant_history']}
-    New Query: {request.question}
-    Persona: {user_profile.persona}
+    # ==========================================
+    # 🤖 ENGINE 2: GROQ + CREWAI (Agentic Mode)
+    # ==========================================
+    else:
+        try:
+            wrk_llm = get_groq_llm("worker", 0)
+            
+            backstory = (
+                f"You are helping {request.user_name}. Today is {current_time}. "
+                "CRITICAL: Never narrate actions. Give direct answers in Hinglish only. "
+                "Use the search tool ONLY if you need real-time facts, otherwise answer from memory."
+            )
+            
+            worker = Agent(
+                role='Expert Python & CS Assistant',
+                goal='Provide accurate answers without narration.',
+                backstory=backstory,
+                llm=wrk_llm,
+                tools=[search_tool],
+                max_iter=3,
+                verbose=False
+            )
+            
+            task_desc = f"Context:\n{history_str}\n\nQuestion: {request.question}\nAnswer directly."
+            task = Task(description=task_desc, expected_output="Clean Hinglish response", agent=worker)
+            
+            raw_res = str(Crew(agents=[worker], tasks=[task]).kickoff())
+            
+            # Clean up JSON leaks and tags
+            clean_res = re.sub(r'```json.*?```', '', raw_res, flags=re.DOTALL)
+            clean_res = re.sub(r'\{.*?\}', '', clean_res)
+            answer = f"{clean_res.strip()}\n\n[Engine: Groq Agents 🤖]"
+            
+        except Exception as e:
+            error_msg = str(e).lower()
+            if "rate limit" in error_msg or "429" in error_msg:
+                answer = "Bhai, Groq ki Rate Limit hit ho gayi hai (100k tokens over). Kripya UI se 'Gemini Mode' switch karein!"
+            else:
+                answer = f"CrewAI/Groq Error: {str(e)}. Please switch to Gemini Mode."
+            print(traceback.format_exc())
 
-    Task:
-    1. Categorize topic strictly.
-    2. Create a perfect 'effective_query' for the worker.
-    3. Write elite 'worker_instructions': Hinglish only, NO permission seeking, NO narration.
-    4. Update persona only for style preferences (e.g., 'keep it short').
-
-    RETURN JSON: {{'category': 'string', 'effective_query': 'string', 'worker_instructions': 'string', 'updated_user_persona': 'string'}}
-    """
-    manager_data = {"category": "general", "effective_query": request.question, "worker_instructions": "Be direct and helpful."}
-    try:
-        mgr_res = str(get_premium_llm().call(messages=[{"role": "user", "content": manager_prompt}]))
-        parsed = extract_json(mgr_res)
-        if parsed: 
-            manager_data = parsed
-            user_profile.persona = manager_data.get("updated_user_persona", user_profile.persona)
-            db.add(user_profile)
-            db.commit()
-    except: pass
-
-    # 👷 PHASE 3: WORKER (Groq 70B - Execution)
-    final_context = f"[Relevant Context: {librarian_data['relevant_history']}]" if librarian_data['relevant_history'] else "[No history context]"
-    backstory = (
-        f"You are talking to {request.user_name}. Topic: {manager_data['category']}. "
-        f"Today: {current_time_str}. Hinglish only. NO NARRATION (Don't say 'Searching...'). "
-        f"RULES: {manager_data['worker_instructions']}"
-    )
-    worker_agent = Agent(role='Executor', goal='Best answer.', backstory=backstory, tools=[search_tool], llm=get_worker_llm(0), verbose=False)
-    worker_task = Task(description=f"Task: {manager_data['effective_query']}\n{final_context}", expected_output="Clean Hinglish response.", agent=worker_agent)
-    
-    raw_answer = str(Crew(agents=[worker_agent], tasks=[worker_task]).kickoff())
-
-    # 🕵️‍♂️ PHASE 4: THE CRITIC (Gemini 1.5 Pro - Quality Control)
-    critic_prompt = f"""
-    User Intent: {request.question}
-    Worker Response: {raw_answer}
-    Task: Fix any 'Searching...' narration, ensure natural Hinglish, remove JSON leaks, and polish for a Gemini-like expert tone.
-    Return ONLY the final polished text for the user.
-    """
-    final_answer = raw_answer
-    try:
-        final_answer = str(get_premium_llm().call(messages=[{"role": "user", "content": critic_prompt}]))
-    except: pass
-
-    # Final Safety Clean
-    final_answer = re.sub(r'```json.*?```', '', final_answer, flags=re.DOTALL)
-    final_answer = final_answer.replace('{', '').replace('}', '').strip()
-    
-    final_response = f"{final_answer}\n\n[M: Premium | W: 70B | C: Premium]"
-    
-    new_entry = ChatMessage(session_id=request.session_id, user_query=request.question, ai_response=final_response)
+    # 3. Save to Database
+    new_entry = ChatMessage(session_id=request.session_id, user_query=request.question, ai_response=answer)
     db.add(new_entry)
     db.commit()
-    return {"answer": final_response}
+    
+    return {"answer": answer}
 
 @app.get("/")
-def root(): return {"message": "Hybrid 4-Tier Hierarchical AI Backend is Live!"}
+def root():
+    return {"message": "Bulletproof Dual-Engine AI Backend is Live!"}
