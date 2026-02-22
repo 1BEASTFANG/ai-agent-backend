@@ -106,7 +106,7 @@ def ask_ai(request: UserRequest, db: Session = Depends(get_db)):
     # ------------------------------------------
     # 🔍 RAG: Deep Context Retrieval
     # ------------------------------------------
-    vector_context = "No relevant past memory found."
+    vector_context = "No relevant past facts found."
     try:
         results = memory_collection.query(
             query_texts=[request.question],
@@ -150,7 +150,7 @@ def ask_ai(request: UserRequest, db: Session = Depends(get_db)):
         try:
             logger.info(f"Routing request to Gemini for user: {request.user_name}")
             prompt = (
-                f"### DEEP MEMORY ###\n{vector_context}\n\n"
+                f"### USER'S PAST FACTS ###\n{vector_context}\n\n"
                 f"### RECENT HISTORY ###\n{history}\n\n"
                 f"### USER QUESTION ###\n{request.question}\n\n"
                 f"### RULES ###\n{point_rule}\nAnswer in friendly natural Hinglish. Address user as {request.user_name}."
@@ -182,12 +182,12 @@ def ask_ai(request: UserRequest, db: Session = Depends(get_db)):
                 key_tracker = f"L:{l_idx} | M:{m_idx} | W:{w_idx} | C:{c_idx}"
 
                 # ==========================================
-                # 🏛️ FULL AGENT DEFINITIONS (No Shortcuts)
+                # 🏛️ FULL AGENT DEFINITIONS 
                 # ==========================================
                 lib_agent = Agent(
                     role='Data Librarian', 
-                    goal='Combine deep memory and recent history to classify query accurately.', 
-                    backstory='Advanced Database Specialist. You evaluate if history/memory is relevant to the new query.', 
+                    goal='Combine memory and recent history to classify query accurately.', 
+                    backstory='Advanced Database Specialist.', 
                     llm=create_llm("groq/llama-3.1-8b-instant", l_key),
                     allow_delegation=False
                 )
@@ -195,15 +195,15 @@ def ask_ai(request: UserRequest, db: Session = Depends(get_db)):
                 mgr_agent = Agent(
                     role='Operations Manager', 
                     goal='Provide strictly formatted action plans without extra text.', 
-                    backstory='Strict Orchestration Lead. You build safe, clear instructions for the worker.', 
+                    backstory='Strict Orchestration Lead.', 
                     llm=create_llm("groq/llama-3.1-8b-instant", m_key),
                     allow_delegation=False
                 )
                 
                 wrk_agent = Agent(
                     role='Elite Worker', 
-                    goal='Execute the manager\'s plan factually and logically.', 
-                    backstory='Senior AI Researcher. You use tools only when necessary and think step-by-step. You do not hallucinate.', 
+                    goal='Execute the manager\'s plan factually.', 
+                    backstory='Senior AI Researcher. You use tools only when necessary. You do not hallucinate.', 
                     llm=create_llm("groq/llama-3.3-70b-versatile", w_key), 
                     tools=[SerperDevTool()],
                     allow_delegation=False,
@@ -212,8 +212,8 @@ def ask_ai(request: UserRequest, db: Session = Depends(get_db)):
                 
                 crt_agent = Agent(
                     role='QA Critic', 
-                    goal='Enforce constraints, format beautifully matching examples, add empathy.', 
-                    backstory='Friendly but strict Quality Assurance Validator. You never print internal logs.', 
+                    goal='Format beautifully matching examples, add empathy.', 
+                    backstory='Friendly Editor. You NEVER print internal logs, word counts, or rule checks. You ONLY speak to the user.', 
                     llm=create_llm("groq/llama-3.1-8b-instant", c_key),
                     allow_delegation=False
                 )
@@ -223,27 +223,28 @@ def ask_ai(request: UserRequest, db: Session = Depends(get_db)):
                 # ==========================================
                 t1 = Task(
                     description=(
-                        f"### DEEP MEMORY ###\n{vector_context}\n\n"
+                        f"### USER'S PAST FACTS ###\n{vector_context}\n\n"
                         f"### RECENT HISTORY ###\n{history}\n\n"
                         f"### NEW QUESTION ###\n{request.question}\n\n"
                         f"INSTRUCTIONS:\n"
                         f"Analyze the NEW QUESTION. Output exactly one of these three summaries:\n"
                         f"1. 'GREETING' (if the user is just saying hi, hello, etc.)\n"
-                        f"2. 'CONTINUATION' (if it relates to history or memory)\n"
-                        f"3. 'NEW_TOPIC' (if it is a completely new question)\n"
+                        f"2. 'MEMORY' (if it asks about past facts or personal info)\n"
+                        f"3. 'NEW_TOPIC' (if it is a new factual or general question)\n"
                         f"Do not write anything else."
                     ),
                     agent=lib_agent,
-                    expected_output="A single word summary: GREETING, CONTINUATION, or NEW_TOPIC."
+                    expected_output="A single word summary: GREETING, MEMORY, or NEW_TOPIC."
                 )
                 
                 t2 = Task(
                     description=(
                         f"### NEW QUESTION ###\n{request.question}\n\n"
                         f"INSTRUCTIONS:\n"
-                        f"Based on the Librarian's summary, write the exact command for the Worker:\n"
-                        f"- If summary is GREETING: Command = 'DO NOT use Search. Just write a friendly hello.'\n"
-                        f"- Otherwise: Command = 'Answer the question factually. Keep it under 200 words using Deep Memory if relevant. Use web search if necessary.'\n"
+                        f"Based on Librarian's summary, write the command for the Worker:\n"
+                        f"- If GREETING: Command = 'DO NOT use Search. Say a friendly hello.'\n"
+                        f"- If MEMORY: Command = 'Answer using PAST FACTS only. Keep it short.'\n"
+                        f"- Otherwise: Command = 'Answer factually. Keep it under 200 words. Use web search if necessary.'\n"
                     ),
                     agent=mgr_agent,
                     context=[t1], 
@@ -252,10 +253,10 @@ def ask_ai(request: UserRequest, db: Session = Depends(get_db)):
                 
                 t3 = Task(
                     description=(
-                        f"### DEEP MEMORY ###\n{vector_context}\n\n"
+                        f"### USER'S PAST FACTS ###\n{vector_context}\n\n"
                         f"### NEW QUESTION ###\n{request.question}\n\n"
                         f"INSTRUCTIONS:\n"
-                        f"Execute the Manager's command exactly. Draft the response. Do not output meta-text. Rely on deep memory if it holds the answer."
+                        f"Execute the Manager's command exactly. Draft the response. Do not output meta-text. Rely heavily on PAST FACTS if the question is personal."
                     ),
                     agent=wrk_agent,
                     context=[t2], 
@@ -266,7 +267,7 @@ def ask_ai(request: UserRequest, db: Session = Depends(get_db)):
                     description=(
                         f"### NEW QUESTION ###\n{request.question}\n\n"
                         f"CRITICAL RULES FOR OUTPUT:\n"
-                        f"1. NEVER output words like 'Word Count', 'Manager Rules Check', 'Revised Response', or 'Validation'.\n"
+                        f"1. NEVER output words like 'Word Count', 'Manager Rules Check', 'Revised Response', or 'Note:'.\n"
                         f"2. You must format the Worker's draft EXACTLY in the style of these examples:\n\n"
                         f"{few_shot_examples}\n\n"
                         f"3. {point_rule}\n"
@@ -281,6 +282,10 @@ def ask_ai(request: UserRequest, db: Session = Depends(get_db)):
                 result = crew.kickoff()
                 
                 clean_answer = str(result).strip()
+
+                # 🚀 THE SAFETY NET: Strip out any leaked meta-text generated by the Critic
+                leak_pattern = r'(?i)(Word Count|Manager\'s Rules Check|Revised Response|Note:|Validation).*'
+                clean_answer = re.sub(leak_pattern, '', clean_answer, flags=re.DOTALL).strip()
                 
                 # Safely extract token usage
                 token_usage = "N/A"
@@ -308,12 +313,12 @@ def ask_ai(request: UserRequest, db: Session = Depends(get_db)):
     db.commit()
 
     # 2. Save to Vector DB (Long term deep memory)
-    # Ensure we only save successful, clean answers to the Vector DB
     if clean_answer and "Error" not in clean_answer:
         try:
             doc_id = str(uuid.uuid4())
             memory_collection.add(
-                documents=[f"User asked: {request.question}\nAI answered: {clean_answer}"],
+                # Storing it cleanly so AI understands it's a past fact when retrieved
+                documents=[f"User previously stated/asked: {request.question}\nAI answered: {clean_answer}"],
                 metadatas=[{"session_id": request.session_id, "timestamp": current_time}],
                 ids=[doc_id]
             )
