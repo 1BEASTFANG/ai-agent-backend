@@ -2,7 +2,6 @@ import os
 import re
 import json
 import traceback
-# 🚀 FIXED 1: Naya Google GenAI import (Deprecation warning hatane ke liye)
 from google import genai 
 from datetime import datetime
 from fastapi import FastAPI, Depends
@@ -44,11 +43,24 @@ def get_db():
 gemini_api_key = os.getenv("GEMINI_API_KEY", "").strip()
 gemini_client = None
 if gemini_api_key:
-    # 🚀 FIXED 2: Naye SDK ke hisab se Client initialization
     gemini_client = genai.Client(api_key=gemini_api_key)
 
+
+# ==========================================
+# 🚀 THE MAGIC: API Key Auto-Switch Trackers
+# ==========================================
+# Yeh dictionary yaad rakhegi ki pichli baar kaunsi key use hui thi
+key_counters = {
+    "librarian": 0,
+    "manager": 0,
+    "worker": 0,
+    "critic": 0
+}
+
 # --- ENGINE 1: GROQ KEY FACTORY ---
-def get_groq_llm(role="worker", index=0):
+def get_groq_llm(role="worker"):
+    global key_counters # Global variables use karne ke liye
+    
     if role == "librarian":
         start, end = 1, 6
         model = "groq/llama-3.1-8b-instant"
@@ -57,13 +69,21 @@ def get_groq_llm(role="worker", index=0):
         model = "groq/llama-3.1-8b-instant"
     else: 
         start, end = 11, 51
-        # 🚀 FIXED 3: Heavy model (70b) hata kar fast model lagaya taaki Rate Limit hit na ho
         model = "groq/llama-3.1-8b-instant"
 
+    # Keys load karo environment variables se
     keys = [os.getenv(f"GROQ_API_KEY_{i}", "").strip() for i in range(start, end)]
     valid = [k for k in keys if k]
     if not valid: raise ValueError(f"Pool {role} has no keys!")
-    return LLM(model=model, api_key=valid[index % len(valid)], temperature=0.2)
+    
+    # 🚀 ROTATION LOGIC (Round-Robin)
+    current_index = key_counters[role]
+    selected_key = valid[current_index % len(valid)]
+    
+    # Agli request ke liye counter ko +1 kar do (agar last key hai toh wapas 0 par aa jayega)
+    key_counters[role] = (current_index + 1) % len(valid)
+    
+    return LLM(model=model, api_key=selected_key, temperature=0.2)
 
 # --- REQUEST MODEL ---
 class UserRequest(BaseModel):
@@ -104,7 +124,6 @@ def ask_ai(request: UserRequest, db: Session = Depends(get_db)):
             if not gemini_client:
                 raise ValueError("Gemini API Key missing in environment!")
             
-            # 🚀 FIXED 4: Naye SDK ka Text Generation syntax
             response = gemini_client.models.generate_content(
                 model='gemini-1.5-pro',
                 contents=prompt
