@@ -70,6 +70,9 @@ class UserRequest(BaseModel):
 def ask_ai(request: UserRequest, db: Session = Depends(get_db)):
     current_time = datetime.now().strftime("%A, %d %B %Y, %I:%M %p")
     
+    # 🚀 SAFETY FIX: Agar koi fatal error aaye toh default answer taiyar rahe
+    answer = f"{request.user_name} bhai, server mein kuch technical locha hai. Thodi der baad try karo."
+    
     # History limit strictly 2 
     past = db.query(ChatMessage).filter(ChatMessage.session_id == request.session_id).order_by(ChatMessage.id.desc()).limit(2).all()
     history = "\n".join([f"U: {m.user_query}\nA: {re.sub(r'\[Engine:.*?\]', '', m.ai_response).strip()}" for m in reversed(past)])
@@ -143,6 +146,8 @@ def ask_ai(request: UserRequest, db: Session = Depends(get_db)):
                     context=[t3], 
                     expected_output="Final empathetic and formatted Hinglish answer."
                 )
+
+                
 
                 crew = Crew(agents=[lib_agent, mgr_agent, wrk_agent, crt_agent], tasks=[t1, t2, t3, t4], verbose=False)
                 answer = f"{str(crew.kickoff()).strip()}\n\n[Engine: Groq Pro 4-Tier 🤖]"
