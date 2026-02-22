@@ -16,3 +16,5 @@ email-validator
 fastapi_sso
 python-multipart
 google-genai
+chromadb
+uuid
