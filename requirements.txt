@@ -15,4 +15,4 @@ apscheduler
 email-validator
 fastapi_sso
 python-multipart
-google-generativeai
+google-genai
