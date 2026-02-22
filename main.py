@@ -39,17 +39,15 @@ def get_db():
     try: yield db
     finally: db.close()
 
-# --- ENGINE 2: NATIVE GEMINI SETUP (UPDATED) ---
+# --- ENGINE 2: NATIVE GEMINI SETUP ---
 gemini_api_key = os.getenv("GEMINI_API_KEY", "").strip()
 gemini_client = None
 if gemini_api_key:
     gemini_client = genai.Client(api_key=gemini_api_key)
 
-
 # ==========================================
 # 🚀 THE MAGIC: API Key Auto-Switch Trackers
 # ==========================================
-# Yeh dictionary yaad rakhegi ki pichli baar kaunsi key use hui thi
 key_counters = {
     "librarian": 0,
     "manager": 0,
@@ -59,7 +57,7 @@ key_counters = {
 
 # --- ENGINE 1: GROQ KEY FACTORY ---
 def get_groq_llm(role="worker"):
-    global key_counters # Global variables use karne ke liye
+    global key_counters 
     
     if role == "librarian":
         start, end = 1, 6
@@ -71,16 +69,14 @@ def get_groq_llm(role="worker"):
         start, end = 11, 51
         model = "groq/llama-3.1-8b-instant"
 
-    # Keys load karo environment variables se
     keys = [os.getenv(f"GROQ_API_KEY_{i}", "").strip() for i in range(start, end)]
     valid = [k for k in keys if k]
     if not valid: raise ValueError(f"Pool {role} has no keys!")
     
-    # 🚀 ROTATION LOGIC (Round-Robin)
+    # ROTATION LOGIC (Round-Robin)
     current_index = key_counters[role]
     selected_key = valid[current_index % len(valid)]
     
-    # Agli request ke liye counter ko +1 kar do (agar last key hai toh wapas 0 par aa jayega)
     key_counters[role] = (current_index + 1) % len(valid)
     
     return LLM(model=model, api_key=selected_key, temperature=0.2)
@@ -90,7 +86,8 @@ class UserRequest(BaseModel):
     session_id: str
     user_name: str
     question: str
-    engine_choice: str = "gemini_native"
+    # 🚀 FIXED: Default engine ab Groq hoga, Gemini nahi!
+    engine_choice: str = "groq_4_tier" 
     is_point_wise: bool = False 
 
 # ==========================================
@@ -100,17 +97,16 @@ class UserRequest(BaseModel):
 def ask_ai(request: UserRequest, db: Session = Depends(get_db)):
     current_time = datetime.now().strftime("%A, %d %B %Y, %I:%M %p")
     
-    # 1. History Context
-    past = db.query(ChatMessage).filter(ChatMessage.session_id == request.session_id).order_by(ChatMessage.id.desc()).limit(6).all()
+    # 🚀 FIXED: History limit 6 se hata kar 2 kar di taaki Groq mein 6000 token limit cross na ho
+    past = db.query(ChatMessage).filter(ChatMessage.session_id == request.session_id).order_by(ChatMessage.id.desc()).limit(2).all()
     history = "\n".join([f"User: {m.user_query}\nAI: {re.sub(r'\[Engine:.*?\]', '', m.ai_response).strip()}" for m in reversed(past)])
 
-    # 🚀 Point-wise Instruction
     point_style = ""
     if request.is_point_wise:
         point_style = "STRICT RULE: Provide the entire response ONLY in bullet points. Do not use long paragraphs."
 
     # ------------------------------------------
-    # ⚡ ENGINE 2: PURE NATIVE GEMINI (UPDATED)
+    # ⚡ ENGINE 2: PURE NATIVE GEMINI 
     # ------------------------------------------
     if request.engine_choice == "gemini_native":
         prompt = f"""
@@ -124,8 +120,9 @@ def ask_ai(request: UserRequest, db: Session = Depends(get_db)):
             if not gemini_client:
                 raise ValueError("Gemini API Key missing in environment!")
             
+            # 🚀 FIXED: Gemini ka naya fast aur stable model
             response = gemini_client.models.generate_content(
-                model='gemini-1.5-pro',
+                model='gemini-1.5-flash', 
                 contents=prompt
             )
             answer = f"{response.text.strip()}\n\n[Engine: Native Gemini ⚡]"
@@ -133,7 +130,7 @@ def ask_ai(request: UserRequest, db: Session = Depends(get_db)):
             answer = f"Gemini Engine Error: {str(e)}"
 
     # ------------------------------------------
-    # 🤖 ENGINE 1: GROQ 4-TIER AGENTS
+    # 🤖 ENGINE 1: GROQ 4-TIER AGENTS (With Backup)
     # ------------------------------------------
     else:
         try:
@@ -152,8 +149,16 @@ def ask_ai(request: UserRequest, db: Session = Depends(get_db)):
             crew = Crew(agents=[lib_agent, mgr_agent, wrk_agent, crt_agent], tasks=[t1, t2, t3, t4], verbose=False)
             answer = f"{str(crew.kickoff()).strip()}\n\n[Engine: Groq 4-Tier 🤖]"
             
-        except Exception as e:
-            answer = f"Agent Error: {str(e)}"
+        except Exception as crew_error:
+            # 🚀 EMERGENCY BACKUP: Agar main system fail hua toh seedha worker direct prompt se answer dega
+            print(f"CrewAI Failed: {str(crew_error)}") 
+            try:
+                emergency_llm = get_groq_llm("worker")
+                emergency_prompt = f"{point_style}\nUser Question: {request.question}\nAnswer directly in Hinglish."
+                raw_response = emergency_llm.call(emergency_prompt)
+                answer = f"{raw_response.strip()}\n\n[Engine: Groq Emergency Backup 🛠️]"
+            except Exception as final_error:
+                answer = "Bhai, dono system down hain. Ek baar internet check karo ya thodi der baad try karo."
 
     # 3. Save & Return
     db.add(ChatMessage(session_id=request.session_id, user_query=request.question, ai_response=answer))
