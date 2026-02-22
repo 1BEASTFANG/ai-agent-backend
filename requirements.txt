@@ -10,3 +10,4 @@ httpx
 litellm
 apscheduler
 email-validator
+fastapi-sso
