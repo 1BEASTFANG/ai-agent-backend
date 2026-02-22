@@ -7,3 +7,4 @@ crewai_tools
 google-genai
 chromadb
 httpx
+litellm
