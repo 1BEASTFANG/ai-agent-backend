@@ -11,3 +11,4 @@ litellm
 apscheduler
 email-validator
 fastapi-sso
+pymongo==4.6.1
