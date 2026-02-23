@@ -231,7 +231,8 @@ def ask_ai(request: UserRequest, db: Session = Depends(get_db)):
                 f"### USER'S PAST FACTS ###\n{vector_context}\n\n"
                 f"### RECENT HISTORY ###\n{history}\n\n"
                 f"### USER QUESTION ###\n{request.question}\n\n"
-                f"### RULES ###\n{point_rule}\nAnswer in friendly natural Hinglish concisely. DO NOT ask follow-up questions. Address user as {request.user_name}."
+                # 🚀 FIX: explicitly telling it not to repeat history
+                f"### RULES ###\n{point_rule}\nAnswer ONLY the CURRENT QUESTION in friendly natural Hinglish concisely. DO NOT repeat the history. DO NOT combine greetings with factual answers. DO NOT ask follow-up questions. Address user as {request.user_name}."
             )
             response = gemini_client.models.generate_content(model='gemini-1.5-flash', contents=prompt)
             clean_answer = response.text.strip()
@@ -264,7 +265,7 @@ def ask_ai(request: UserRequest, db: Session = Depends(get_db)):
                 # ==========================================
                 lib_agent = Agent(
                     role='Data Librarian', 
-                    goal='Classify query type accurately.', 
+                    goal='Classify NEW QUESTION only.', # 🚀 FIX
                     backstory='Advanced Database Specialist.', 
                     llm=create_llm("groq/llama-3.1-8b-instant", l_key),
                     allow_delegation=False
@@ -272,7 +273,7 @@ def ask_ai(request: UserRequest, db: Session = Depends(get_db)):
                 
                 mgr_agent = Agent(
                     role='Operations Manager', 
-                    goal='Provide 1-line command.', 
+                    goal='Provide 1-line command based on classification.', 
                     backstory='Strict Orchestration Lead.', 
                     llm=create_llm("groq/llama-3.1-8b-instant", m_key),
                     allow_delegation=False
@@ -280,8 +281,8 @@ def ask_ai(request: UserRequest, db: Session = Depends(get_db)):
                 
                 wrk_agent = Agent(
                     role='Elite Worker', 
-                    goal='Execute the manager\'s plan factually.', 
-                    backstory='Senior AI Researcher. You ONLY use ``` markdown blocks for writing actual Programming Code (like C++, Python). You NEVER use markdown blocks for text, explanations, or jokes.', 
+                    goal='Answer ONLY the NEW QUESTION factually.', # 🚀 FIX
+                    backstory='Senior AI Researcher. You ONLY use ``` markdown blocks for writing actual Programming Code (like C++, Python). You NEVER use markdown blocks for text, explanations, or jokes. You NEVER use words like "Memory", "Database", or "Fact Store" in your response. You DO NOT answer past questions from history.', # 🚀 FIX
                     llm=create_llm("groq/llama-3.3-70b-versatile", w_key), 
                     tools=[SerperDevTool()],
                     allow_delegation=False,
@@ -291,7 +292,7 @@ def ask_ai(request: UserRequest, db: Session = Depends(get_db)):
                 crt_agent = Agent(
                     role='QA Critic', 
                     goal='Format beautifully matching examples, add empathy.', 
-                    backstory='Friendly Editor. You NEVER print internal logs, word counts, or rule checks. You NEVER ask follow-up questions at the end of your response.', 
+                    backstory='Friendly Editor. You NEVER print internal logs, word counts, or rule checks. You NEVER ask follow-up questions at the end of your response. You NEVER mix answers from history.', # 🚀 FIX
                     llm=create_llm("groq/llama-3.1-8b-instant", c_key),
                     allow_delegation=False
                 )
@@ -305,7 +306,7 @@ def ask_ai(request: UserRequest, db: Session = Depends(get_db)):
                         f"### RECENT HISTORY ###\n{history}\n\n"
                         f"### NEW QUESTION ###\n{request.question}\n\n"
                         f"INSTRUCTIONS:\n"
-                        f"Analyze the NEW QUESTION. Output exactly 1 word:\n"
+                        f"Analyze ONLY the NEW QUESTION. Output exactly 1 word:\n" # 🚀 FIX
                         f"- 'GREETING' (if hi, hello)\n"
                         f"- 'FACT_STORE' (if user is telling a fact about themselves to remember)\n"
                         f"- 'MEMORY_RECALL' (if user is asking about past facts)\n"
@@ -336,7 +337,7 @@ def ask_ai(request: UserRequest, db: Session = Depends(get_db)):
                         f"### USER'S PAST FACTS ###\n{vector_context}\n\n"
                         f"### NEW QUESTION ###\n{request.question}\n\n"
                         f"INSTRUCTIONS:\n"
-                        f"Execute Manager's command. DO NOT output meta-text. ONLY use ``` language ``` blocks if writing a programming script. DO NOT use code blocks for jokes or text."
+                        f"Execute Manager's command to answer ONLY the NEW QUESTION. DO NOT output meta-text. ONLY use ``` language ``` blocks if writing a programming script. DO NOT use code blocks for jokes or text. DO NOT repeat or answer anything from the previous history. CRITICAL: DO NOT say things like 'this is in our fact store' or 'based on memory'." # 🚀 FIX
                     ),
                     agent=wrk_agent,
                     context=[t2], 
@@ -347,11 +348,13 @@ def ask_ai(request: UserRequest, db: Session = Depends(get_db)):
                     description=(
                         f"### NEW QUESTION ###\n{request.question}\n\n"
                         f"CRITICAL RULES FOR OUTPUT:\n"
-                        f"1. NEVER output words like 'Word Count', 'Manager Rules Check', 'Revised Response', or 'Note:'.\n"
-                        f"2. You must format the Worker's draft EXACTLY mimicking the style of these examples:\n\n"
+                        f"1. Choose ONLY ONE matching situation from the examples below. DO NOT combine answers from past history.\n" # 🚀 FIX
+                        f"2. NEVER output words like 'Word Count', 'Manager Rules Check', 'Revised Response', or 'Note:'.\n"
+                        f"3. NEVER use words like 'Fact Store', 'Database', or 'Memory'.\n" # 🚀 FIX
+                        f"4. You must format the Worker's draft EXACTLY mimicking the style of these examples:\n\n"
                         f"{few_shot_examples}\n\n"
-                        f"3. DO NOT ask repetitive follow-up questions (e.g. stop saying 'kya aap aur janna chahte hain?'). Just give the answer and stop.\n"
-                        f"4. {point_rule}\n"
+                        f"5. DO NOT ask repetitive follow-up questions (e.g. stop saying 'kya aap aur janna chahte hain?'). Just give the answer and stop.\n"
+                        f"6. {point_rule}\n"
                         f"OUTPUT ONLY THE FINAL SPOKEN MESSAGE THAT THE USER WILL READ."
                     ),
                     agent=crt_agent,
@@ -364,8 +367,8 @@ def ask_ai(request: UserRequest, db: Session = Depends(get_db)):
                 
                 clean_answer = str(result).strip()
 
-                # 🚀 THE SAFETY NET: Strip out any leaked meta-text generated by the Critic
-                leak_pattern = r'(?i)(Word Count|Manager\'s Rules Check|Revised Response|Note:|Validation|Code Quality|Empathy).*'
+                # 🚀 FIX: The strict safety net now deletes "Fact Store" and "Database"
+                leak_pattern = r'(?i)(Word Count|Manager\'s Rules Check|Revised Response|Note:|Validation|Code Quality|Empathy|Fact Store|Database).*'
                 clean_answer = re.sub(leak_pattern, '', clean_answer, flags=re.DOTALL).strip()
                 
                 # Safely extract token usage
@@ -396,7 +399,8 @@ def ask_ai(request: UserRequest, db: Session = Depends(get_db)):
         try:
             doc_id = str(uuid.uuid4())
             memory_collection.add(
-                documents=[f"User Fact/Question: {request.question}\nAI Answer: {clean_answer}"],
+                # Storing it cleanly so AI understands it's a past fact when retrieved
+                documents=[f"User previously stated/asked: {request.question}\nAI answered: {clean_answer}"],
                 metadatas=[{"session_id": request.session_id, "timestamp": current_time}],
                 ids=[doc_id]
             )
