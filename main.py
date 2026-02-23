@@ -7,6 +7,7 @@ import logging
 import asyncio 
 import httpx   
 import chromadb 
+import certifi # 🚀 NEW: SSL Handshake fix ke liye
 from google import genai 
 from datetime import datetime
 from fastapi import FastAPI
@@ -35,7 +36,8 @@ if not MONGO_URL:
 
 try:
     if MONGO_URL:
-        mongo_client = MongoClient(MONGO_URL)
+        # 🚀 FIX: Added tlsCAFile to fix the SSL Handshake TLSV1_ALERT_INTERNAL_ERROR
+        mongo_client = MongoClient(MONGO_URL, tlsCAFile=certifi.where())
         mongo_client.admin.command('ping')
         logger.info("Successfully connected to MongoDB Atlas! 🎉")
         
@@ -479,6 +481,11 @@ def ask_ai(request: UserRequest):
 # ==========================================
 # 🚀 5. KEEP-ALIVE SYSTEM (Anti-Sleep)
 # ==========================================
+@app.get("/")
+def home():
+    """Render ke health checks ko 404 error se bachane ke liye."""
+    return {"status": "AI Agent Server is Running."}
+
 @app.get("/ping")
 def ping():
     """Yeh chota sa function server ko batayega ki wo zinda hai, bina AI ko jagaye."""
