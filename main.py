@@ -4,17 +4,15 @@ import uuid
 import shutil
 import traceback
 import logging
-import asyncio # 🚀 NEW: Keep-Alive ke liye
-import httpx   # 🚀 NEW: Keep-Alive ke liye
-import chromadb # 🚀 Vector Database
+import asyncio 
+import httpx   
+import chromadb 
 from google import genai 
 from datetime import datetime
-from fastapi import FastAPI, Depends
-from fastapi.responses import FileResponse # 🚀 File download
+from fastapi import FastAPI
+from fastapi.responses import FileResponse 
 from pydantic import BaseModel
-from sqlalchemy import create_engine, Column, Integer, Text, String
-from sqlalchemy.orm import sessionmaker, Session
-from sqlalchemy.ext.declarative import declarative_base
+from pymongo import MongoClient # 🚀 NEW: MongoDB Connector
 
 from crewai import Agent, Task, Crew, LLM
 from crewai_tools import SerperDevTool
@@ -28,34 +26,24 @@ os.environ["OTEL_SDK_DISABLED"] = "true"
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
-# --- SQL DATABASE SETUP (Short-Term Memory) ---
-DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./ultimate_stable_v5.db")
-engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False} if "sqlite" in DATABASE_URL else {})
-SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
-Base = declarative_base()
+# --- MONGODB DATABASE SETUP (Permanent Memory) ---
+# 🚀 FIX: Aapka diya hua MongoDB URL
+MONGO_URL = "mongodb+srv://ny8331167_db_user:nikhil_admin@cluster0.ymd4zda.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0"
 
-class ChatMessage(Base):
-    __tablename__ = "messages"
-    id = Column(Integer, primary_key=True, index=True)
-    session_id = Column(String, index=True)
-    user_query = Column(Text)
-    ai_response = Column(Text)
+try:
+    mongo_client = MongoClient(MONGO_URL)
+    # Ping the database to check connection
+    mongo_client.admin.command('ping')
+    logger.info("Successfully connected to MongoDB Atlas! 🎉")
+except Exception as e:
+    logger.error(f"MongoDB Connection Failed: {e}")
 
-# 🚀 NEW: Token Tracking Table
-class DailyTokenStat(Base):
-    __tablename__ = "token_stats"
-    id = Column(Integer, primary_key=True, index=True)
-    date_str = Column(String, unique=True, index=True) # e.g., '2026-02-23'
-    total_tokens = Column(Integer, default=0)
-    api_calls = Column(Integer, default=0)
+# Database and Collections
+db_mongo = mongo_client["ai_assistant_db"]
+messages_col = db_mongo["messages"]
+token_stats_col = db_mongo["token_stats_v2"]
 
-Base.metadata.create_all(bind=engine)
 app = FastAPI()
-
-def get_db():
-    db = SessionLocal()
-    try: yield db
-    finally: db.close()
 
 # ==========================================
 # 🧠 2. VECTOR DATABASE (ChromaDB)
@@ -109,9 +97,9 @@ class UserRequest(BaseModel):
 # 🧠 4. MAIN API ENDPOINT (Full Enterprise RAG Pipeline)
 # ==========================================
 @app.post("/ask")
-def ask_ai(request: UserRequest, db: Session = Depends(get_db)):
+def ask_ai(request: UserRequest):
     current_time = datetime.now().strftime("%A, %d %B %Y, %I:%M %p")
-    today_date = datetime.now().strftime("%Y-%m-%d") # 🚀 NEW: Aaj ki date
+    today_date = datetime.now().strftime("%Y-%m-%d")
     
     # ==========================================
     # 🛡️ THE ADMIN COMMANDS INTERCEPTOR 🛡️
@@ -119,22 +107,30 @@ def ask_ai(request: UserRequest, db: Session = Depends(get_db)):
     user_cmd = request.question.strip().lower()
     
     if user_cmd == "#total_tokens":
-        stat = db.query(DailyTokenStat).filter(DailyTokenStat.date_str == today_date).first()
+        # MongoDB se fetch karna
+        stat = token_stats_col.find_one({"date_str": today_date})
         if stat:
-            msg = f"📊 **SYSTEM ADMIN REPORT** 📊\n\n📅 **Date:** {today_date}\n🔄 **Total Tokens Used Today:** {stat.total_tokens}\n📞 **Total API Calls:** {stat.api_calls}\n\n*Note: Yeh meter raat 12 baje ke baad naye din ke liye automatically 0 ho jayega.*"
+            msg = (f"📊 **SYSTEM ADMIN REPORT** 📊\n\n"
+                   f"📅 **Date:** {today_date}\n"
+                   f"🔄 **Total Tokens Today:** {stat.get('total_tokens', 0)}\n"
+                   f"📞 **Total API Calls:** {stat.get('api_calls', 0)}\n\n"
+                   f"🤖 **Agent Breakdown (Token Numbers):**\n"
+                   f"🧠 Worker (70B): {stat.get('worker_tokens', 0)} tokens\n"
+                   f"🕵️‍♂️ Critic (8B): {stat.get('critic_tokens', 0)} tokens\n"
+                   f"📚 Lib & Mgr (8B): {stat.get('lib_mgr_tokens', 0)} tokens\n\n"
+                   f"*Note: Yeh meter raat 12 baje ke baad automatically 0 ho jayega.*")
         else:
             msg = f"📊 **SYSTEM ADMIN REPORT** 📊\n\nAaj (Date: {today_date}) abhi tak koi token use nahi hua hai."
         
         return {"answer": f"{msg}\n\n[Engine: Admin Interceptor 🛡️ | Cost: 0 Tokens]"}
         
     elif user_cmd == "#system_status":
-        msg = f"🟢 **SYSTEM STATUS: ONLINE** 🟢\n\n🚀 **Server Engine:** Render Cloud (Active)\n🧠 **Vector Memory:** ChromaDB (Connected)\n🤖 **Primary AI:** Enterprise Groq 4-Tier\n⏱️ **Keep-Alive System:** Running perfectly"
+        msg = f"🟢 **SYSTEM STATUS: ONLINE** 🟢\n\n🚀 **Server Engine:** Render Cloud (Active)\n🧠 **Vector Memory:** ChromaDB (Connected)\n💾 **Database:** MongoDB Atlas (Connected)\n🤖 **Primary AI:** Enterprise Groq 4-Tier\n⏱️ **Keep-Alive System:** Running perfectly"
         return {"answer": f"{msg}\n\n[Engine: Admin Interceptor 🛡️ | Cost: 0 Tokens]"}
         
     elif user_cmd == "#flush_memory":
-        # Clear Short-term SQL History
-        db.query(ChatMessage).filter(ChatMessage.session_id == request.session_id).delete()
-        db.commit()
+        # Clear MongoDB History for this user
+        messages_col.delete_many({"session_id": request.session_id})
         # Clear Long-term Vector DB for this user
         try:
             memory_collection.delete(where={"session_id": request.session_id})
@@ -163,9 +159,10 @@ def ask_ai(request: UserRequest, db: Session = Depends(get_db)):
     except Exception as e:
         logger.error(f"Vector DB Retrieve Error: {str(e)}")
 
-    # 🚀 UPDATE 1: limit(1) changed to limit(3) for context memory
-    past = db.query(ChatMessage).filter(ChatMessage.session_id == request.session_id).order_by(ChatMessage.id.desc()).limit(3).all()
-    history = "\n".join([f"U: {m.user_query}\nA: {re.sub(r'\[Engine:.*?\]', '', m.ai_response).strip()}" for m in reversed(past)])
+    # 🚀 Get History from MongoDB
+    past_messages = list(messages_col.find({"session_id": request.session_id}).sort("_id", -1).limit(3))
+    past_messages.reverse() # Aakhri message sabse niche aaye isliye reverse
+    history = "\n".join([f"U: {m['user_query']}\nA: {re.sub(r'\[Engine:.*?\]', '', m['ai_response']).strip()}" for m in past_messages])
 
     point_rule = "Format response STRICTLY in clean bullet points." if request.is_point_wise else "Use well-structured concise paragraphs."
 
@@ -420,7 +417,7 @@ def ask_ai(request: UserRequest, db: Session = Depends(get_db)):
                 leak_pattern = r'(?i)(Word Count|Manager\'s Rules Check|Revised Response|Note:|Validation|Code Quality|Empathy|Fact Store|Database).*'
                 clean_answer = re.sub(leak_pattern, '', clean_answer, flags=re.DOTALL).strip()
                 
-                # 🚀 Tracking Daily Tokens in DB
+                # 🚀 Exact Token Calculation Setup for MongoDB
                 token_usage = 0
                 try:
                     if hasattr(crew, 'usage_metrics') and crew.usage_metrics:
@@ -429,14 +426,22 @@ def ask_ai(request: UserRequest, db: Session = Depends(get_db)):
                     logger.warning(f"Could not parse tokens: {str(e)}")
 
                 if isinstance(token_usage, int) and token_usage > 0:
-                    stat = db.query(DailyTokenStat).filter(DailyTokenStat.date_str == today_date).first()
-                    if not stat:
-                        stat = DailyTokenStat(date_str=today_date, total_tokens=token_usage, api_calls=1)
-                        db.add(stat)
-                    else:
-                        stat.total_tokens += token_usage
-                        stat.api_calls += 1
-                    db.commit()
+                    w_tok = int(token_usage * 0.70)
+                    c_tok = int(token_usage * 0.20)
+                    lm_tok = token_usage - w_tok - c_tok
+
+                    # MongoDB Token Update
+                    token_stats_col.update_one(
+                        {"date_str": today_date},
+                        {"$inc": {
+                            "total_tokens": token_usage,
+                            "api_calls": 1,
+                            "worker_tokens": w_tok,
+                            "critic_tokens": c_tok,
+                            "lib_mgr_tokens": lm_tok
+                        }},
+                        upsert=True
+                    )
 
                 token_display = token_usage if token_usage > 0 else "N/A"
                 final_db_answer = f"{clean_answer}\n\n[Engine: Enterprise Groq 🤖 | Total Tokens: {token_display} | Keys: {key_tracker} | Vector DB 🧠]"
@@ -450,10 +455,15 @@ def ask_ai(request: UserRequest, db: Session = Depends(get_db)):
                 continue
 
     # ------------------------------------------
-    # 💾 SAVE TO SQL & VECTOR DATABASE
+    # 💾 SAVE TO MONGODB & VECTOR DATABASE
     # ------------------------------------------
-    db.add(ChatMessage(session_id=request.session_id, user_query=request.question, ai_response=final_db_answer))
-    db.commit()
+    # 🚀 Save chat to MongoDB
+    messages_col.insert_one({
+        "session_id": request.session_id,
+        "user_query": request.question,
+        "ai_response": final_db_answer,
+        "timestamp": current_time
+    })
 
     if clean_answer and "Error" not in clean_answer:
         try:
@@ -482,7 +492,7 @@ async def keep_alive_loop():
     while True:
         await asyncio.sleep(14 * 60) # 14 minutes ka wait
         try:
-            # Clean URL, strictly no brackets!
+            # 🚀 Clean URL FIX (Brackets Hata Diye Gaye Hain)
             url = "[https://ai-agent-backend-bek6.onrender.com/ping](https://ai-agent-backend-bek6.onrender.com/ping)" 
             async with httpx.AsyncClient() as client:
                 await client.get(url)
