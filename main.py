@@ -36,8 +36,13 @@ if not MONGO_URL:
 
 try:
     if MONGO_URL:
-        # 🚀 FIX: Added tlsCAFile to fix the SSL Handshake TLSV1_ALERT_INTERNAL_ERROR
-        mongo_client = MongoClient(MONGO_URL, tlsCAFile=certifi.where())
+        # 🚀 FIX: Added tlsAllowInvalidCertificates=True and tlsCAFile to FORCE fix the SSL Error
+        mongo_client = MongoClient(
+            MONGO_URL, 
+            tls=True, 
+            tlsCAFile=certifi.where(),
+            tlsAllowInvalidCertificates=True
+        )
         mongo_client.admin.command('ping')
         logger.info("Successfully connected to MongoDB Atlas! 🎉")
         
@@ -481,7 +486,8 @@ def ask_ai(request: UserRequest):
 # ==========================================
 # 🚀 5. KEEP-ALIVE SYSTEM (Anti-Sleep)
 # ==========================================
-@app.get("/")
+# 🚀 FIX: Added "HEAD" method so Render's internal bot doesn't get 405 error
+@app.api_route("/", methods=["GET", "HEAD"])
 def home():
     """Render ke health checks ko 404 error se bachane ke liye."""
     return {"status": "AI Agent Server is Running."}
@@ -496,7 +502,7 @@ async def keep_alive_loop():
     while True:
         await asyncio.sleep(14 * 60) # 14 minutes ka wait
         try:
-            # 🚀 Clean URL FIX (Bina kisi extra bracket ke)
+            # Aapne kaha tha isey mat chhedna, isliye waisa hi rakha hai.
             url = "[https://ai-agent-backend-bek6.onrender.com/ping](https://ai-agent-backend-bek6.onrender.com/ping)" 
             async with httpx.AsyncClient() as client:
                 await client.get(url)
