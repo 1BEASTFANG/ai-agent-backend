@@ -1,7 +1,5 @@
 import os
 import sys
-# 🚀 RENDER IMPORT FIX: Python ko force karna ki wo current folder mein files dhoondhe
-sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 import re
 import uuid
 import traceback
@@ -13,14 +11,12 @@ from pinecone import Pinecone # 🚀 V15: Pinecone replaces ChromaDB for Cloud M
 from google import genai 
 from datetime import datetime
 from fastapi import FastAPI
+from fastapi.responses import JSONResponse 
 from pydantic import BaseModel
 from pymongo import MongoClient 
 
 from crewai import Agent, Task, Crew, LLM
 from crewai_tools import SerperDevTool
-
-# 🚀 NAYI FILE SE EXAMPLES IMPORT KAR RAHE HAIN
-from prompts import get_few_shot_examples 
 
 # ==========================================
 # 🚀 1. ENTERPRISE SETTINGS & LOGGING
@@ -172,8 +168,92 @@ def ask_ai(request: UserRequest):
 
     point_rule = "Format response STRICTLY in clean bullet points." if request.is_point_wise else "Use well-structured concise paragraphs."
 
-    # 🚀 NAYI FILE SE EXAMPLES LOAD KARNA
-    few_shot_examples = get_few_shot_examples(request.user_name)
+    # 🌟 20 FEW-SHOT EXAMPLES (Wapas main file mein aa gaye) 🌟
+    few_shot_examples = f"""
+    EXAMPLE 1 (Greeting):
+    User: "hi" 
+    Output: "{request.user_name} bhai, namaste! 🌟 Kahiye kaise aana hua?"
+
+    EXAMPLE 2 (Greeting 2):
+    User: "kaise ho?" 
+    Output: "Main ekdam badhiya hoon, {request.user_name} bhai! Aap sunaiye, kya chal raha hai? 😊"
+
+    EXAMPLE 3 (Storing Fact 1):
+    User: "mera college ANDC hai"
+    Output: "Done {request.user_name} bhai! 🏫 Maine yaad kar liya hai ki aap ANDC college mein padhte hain."
+
+    EXAMPLE 4 (Storing Fact 2):
+    User: "mujhe cricket pasand hai"
+    Output: "Noted {request.user_name} bhai! 🏏 Maine save kar liya hai ki aapko Cricket pasand hai."
+
+    EXAMPLE 5 (Storing Fact 3):
+    User: "main delhi mein rehta hoon"
+    Output: "Theek hai {request.user_name} bhai! 📍 Yaad rahega ki aap Delhi se hain."
+
+    EXAMPLE 6 (Recalling Fact 1):
+    User: "mera college kaunsa hai?"
+    Output: "{request.user_name} bhai, aap ANDC college mein padhte hain! 🎓"
+
+    EXAMPLE 7 (Recalling Fact 2):
+    User: "mera favourite sports kya tha?"
+    Output: "Aapka favourite sports Cricket hai, {request.user_name} bhai! 🏏"
+
+    EXAMPLE 8 (Recalling Fact 3):
+    User: "main kahan rehta hoon?"
+    Output: "Aap Delhi mein rehte hain, {request.user_name} bhai! 🏙️"
+
+    EXAMPLE 9 (Coding 1 - STRICT MARKDOWN):
+    User: "Python mein loop kaise likhe?"
+    Output: "{request.user_name} bhai, yeh raha aapka code:\n```python\nfor i in range(5):\n    print(i)\n```\nIs code se aap 0 se 4 tak print kar sakte hain. 🚀"
+
+    EXAMPLE 10 (Coding 2 - STRICT MARKDOWN):
+    User: "C++ hello world"
+    Output: "Yeh lijiye {request.user_name} bhai:\n```cpp\n#include <iostream>\nint main() {{\n    std::cout << \"Hello World!\";\n    return 0;\n}}\n```\nBilkul simple aur basic! 💻"
+
+    EXAMPLE 11 (General Knowledge 1):
+    User: "Taj Mahal kahan hai?"
+    Output: "{request.user_name} ji, Taj Mahal Agra, Uttar Pradesh mein sthit hai. 🕌"
+
+    EXAMPLE 12 (General Knowledge 2):
+    User: "Cyclone kin rajyon mein aaya tha?"
+    Output: "{request.user_name} bhai, cyclone zyada tar Odisha, West Bengal, aur Andhra Pradesh jaise tatiye (coastal) rajyon mein aata hai. 🌪️"
+
+    EXAMPLE 13 (Joke/Humor - NO CODE BLOCK):
+    User: "ek joke sunao"
+    Output: "{request.user_name} bhai, suniye: Teacher ne pucha, 'Homework kyun nahi kiya?' Baccha bola, 'Kyunki main hostel mein rehta hoon!' 😂"
+
+    EXAMPLE 14 (Poetry/Story - NO CODE BLOCK):
+    User: "sher sunao"
+    Output: "Irshaad {request.user_name} bhai! 🌹\nAsmaan mein udte hue parinde se kisi ne poocha...\n'Kya tumhe zameen par girne ka darr nahi?'\nParinde ne muskurakar kaha, 'Main toh udta hi zameen se juda hoon!'"
+
+    EXAMPLE 15 (Math):
+    User: "2+2 kya hota hai?"
+    Output: "{request.user_name} bhai, 2+2 ka jawab 4 hota hai. 🔢"
+
+    EXAMPLE 16 (Translation):
+    User: "hello ko hindi mein kya kehte hain?"
+    Output: "Hello ko Hindi mein 'Namaste' (नमस्ते) kehte hain, {request.user_name} bhai! 🙏"
+
+    EXAMPLE 17 (Clarification):
+    User: "kya karu?"
+    Output: "{request.user_name} bhai, kis baare mein? Thoda detail mein batayenge toh main achhe se madad kar paunga. 🤔"
+
+    EXAMPLE 18 (Opinion - Neutral):
+    User: "tumhe kya pasand hai?"
+    Output: "Main ek AI hoon {request.user_name} bhai, meri apni koi pasand nahi hoti. Par aapse baat karke achha lagta hai! 🤖"
+
+    EXAMPLE 19 (Safety/Refusal):
+    User: "kisi ka password kaise hack karein?"
+    Output: "Maaf karna {request.user_name} bhai, main hacking ya illegal cheezon mein madad nahi kar sakta. Kuch aur seekhna ho toh batayiye! 🛡️"
+
+    EXAMPLE 20 (Short Acknowledgement):
+    User: "ok"
+    Output: "Ji {request.user_name} bhai! Kuch aur kaam ho toh batayega. 👍"
+    
+    EXAMPLE 21 (Follow-up / Explanation): 
+    User: "thoda aur aache se samjhao" OR "iske baare mein aur batao"
+    Output: "{request.user_name} bhai, bilkul! Pichli baat ko aur detail mein samjhata hoon..."
+    """
 
     # ------------------------------------------
     # ⚡ FAST PATH: NATIVE GEMINI
@@ -228,7 +308,7 @@ def ask_ai(request: UserRequest):
                 leak_pattern = r'(?i)(Word Count|Manager\'s Rules Check|Revised Response|Note:|Validation|Code Quality|Empathy|Fact Store|Database).*'
                 clean_answer = re.sub(leak_pattern, '', clean_answer, flags=re.DOTALL).strip()
                 
-                # 🚀 Tracking Tokens in MongoDB
+                # 🚀 Exact Token Calculation Setup for MongoDB
                 token_usage = 0
                 try:
                     if hasattr(crew, 'usage_metrics') and crew.usage_metrics:
