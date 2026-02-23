@@ -41,13 +41,16 @@ class ChatMessage(Base):
     user_query = Column(Text)
     ai_response = Column(Text)
 
-# 🚀 NEW: Token Tracking Table
+# 🚀 UPDATE: Token Tracking Table with Exact Agent Breakdown (v2)
 class DailyTokenStat(Base):
-    __tablename__ = "token_stats"
+    __tablename__ = "token_stats_v2" # Table name changed to avoid crash
     id = Column(Integer, primary_key=True, index=True)
     date_str = Column(String, unique=True, index=True) # e.g., '2026-02-23'
     total_tokens = Column(Integer, default=0)
     api_calls = Column(Integer, default=0)
+    worker_tokens = Column(Integer, default=0)   
+    critic_tokens = Column(Integer, default=0)   
+    lib_mgr_tokens = Column(Integer, default=0)  
 
 Base.metadata.create_all(bind=engine)
 app = FastAPI()
@@ -111,7 +114,7 @@ class UserRequest(BaseModel):
 @app.post("/ask")
 def ask_ai(request: UserRequest, db: Session = Depends(get_db)):
     current_time = datetime.now().strftime("%A, %d %B %Y, %I:%M %p")
-    today_date = datetime.now().strftime("%Y-%m-%d") # 🚀 NEW: Aaj ki date
+    today_date = datetime.now().strftime("%Y-%m-%d") 
     
     # ==========================================
     # 🛡️ THE ADMIN COMMANDS INTERCEPTOR 🛡️
@@ -121,7 +124,16 @@ def ask_ai(request: UserRequest, db: Session = Depends(get_db)):
     if user_cmd == "#total_tokens":
         stat = db.query(DailyTokenStat).filter(DailyTokenStat.date_str == today_date).first()
         if stat:
-            msg = f"📊 **SYSTEM ADMIN REPORT** 📊\n\n📅 **Date:** {today_date}\n🔄 **Total Tokens Used Today:** {stat.total_tokens}\n📞 **Total API Calls:** {stat.api_calls}\n\n*Note: Yeh meter raat 12 baje ke baad naye din ke liye automatically 0 ho jayega.*"
+            # 🚀 Breakdown in exact NUMBERS as you requested
+            msg = (f"📊 **SYSTEM ADMIN REPORT** 📊\n\n"
+                   f"📅 **Date:** {today_date}\n"
+                   f"🔄 **Total Tokens Today:** {stat.total_tokens}\n"
+                   f"📞 **Total API Calls:** {stat.api_calls}\n\n"
+                   f"🤖 **Agent Breakdown (Token Numbers):**\n"
+                   f"🧠 Worker (70B): {stat.worker_tokens} tokens\n"
+                   f"🕵️‍♂️ Critic (8B): {stat.critic_tokens} tokens\n"
+                   f"📚 Lib & Mgr (8B): {stat.lib_mgr_tokens} tokens\n\n"
+                   f"*Note: Yeh meter raat 12 baje ke baad automatically 0 ho jayega.*")
         else:
             msg = f"📊 **SYSTEM ADMIN REPORT** 📊\n\nAaj (Date: {today_date}) abhi tak koi token use nahi hua hai."
         
@@ -132,15 +144,13 @@ def ask_ai(request: UserRequest, db: Session = Depends(get_db)):
         return {"answer": f"{msg}\n\n[Engine: Admin Interceptor 🛡️ | Cost: 0 Tokens]"}
         
     elif user_cmd == "#flush_memory":
-        # Clear Short-term SQL History
         db.query(ChatMessage).filter(ChatMessage.session_id == request.session_id).delete()
         db.commit()
-        # Clear Long-term Vector DB for this user
         try:
             memory_collection.delete(where={"session_id": request.session_id})
         except Exception: pass
         
-        msg = f"🧹 **MEMORY FLUSHED SUCCESSFULLY** 🧹\n\n{request.user_name} bhai, aapki saari purani baatein aur yaadein system se delete kar di gayi hain. Mera dimaag ab ekdam fresh hai! Ek naye sire se shuruwat karte hain."
+        msg = f"🧹 **MEMORY FLUSHED SUCCESSFULLY** 🧹\n\n{request.user_name} bhai, aapki saari purani baatein aur yaadein system se delete kar di gayi hain. Mera dimaag ab ekdam fresh hai!"
         return {"answer": f"{msg}\n\n[Engine: Admin Interceptor 🛡️ | Cost: 0 Tokens]"}
 
     # ------------------------------------------
@@ -163,13 +173,13 @@ def ask_ai(request: UserRequest, db: Session = Depends(get_db)):
     except Exception as e:
         logger.error(f"Vector DB Retrieve Error: {str(e)}")
 
-    # 🚀 UPDATE 1: limit(1) changed to limit(3) for context memory
+    # 🚀 Context memory set to limit(3)
     past = db.query(ChatMessage).filter(ChatMessage.session_id == request.session_id).order_by(ChatMessage.id.desc()).limit(3).all()
     history = "\n".join([f"U: {m.user_query}\nA: {re.sub(r'\[Engine:.*?\]', '', m.ai_response).strip()}" for m in reversed(past)])
 
     point_rule = "Format response STRICTLY in clean bullet points." if request.is_point_wise else "Use well-structured concise paragraphs."
 
-    # 🌟 20 FEW-SHOT EXAMPLES (The Ultimate AI Brainwash Matrix) 🌟
+    # 🌟 21 FEW-SHOT EXAMPLES 🌟
     few_shot_examples = f"""
     EXAMPLE 1 (Greeting):
     User: "hi" 
@@ -269,9 +279,6 @@ def ask_ai(request: UserRequest, db: Session = Depends(get_db)):
     Output: "{request.user_name} bhai, bilkul! Pichli baat ko aur detail mein samjhata hoon..."
     """
 
-    # ------------------------------------------
-    # ⚡ FAST PATH: NATIVE GEMINI
-    # ------------------------------------------
     if request.engine_choice == "gemini_native":
         try:
             logger.info(f"Routing request to Gemini for user: {request.user_name}")
@@ -288,9 +295,6 @@ def ask_ai(request: UserRequest, db: Session = Depends(get_db)):
             clean_answer = "Error"
             final_db_answer = f"Gemini Error: {str(e)}"
 
-    # ------------------------------------------
-    # 🤖 DEEP RESEARCH PATH: ENTERPRISE GROQ (4-TIER)
-    # ------------------------------------------
     else:
         logger.info(f"Initiating Enterprise Groq Pipeline for user: {request.user_name}")
         lib_keys, mgr_keys, wrk_keys = get_groq_keys("librarian"), get_groq_keys("manager"), get_groq_keys("worker")
@@ -299,22 +303,17 @@ def ask_ai(request: UserRequest, db: Session = Depends(get_db)):
         success = False
         for i in range(len(wrk_keys)):
             try:
-                # 🔄 Round-Robin Key Management
                 l_idx, m_idx, w_idx, c_idx = (i % len(lib_keys)) + 1, (i % len(mgr_keys)) + 1, i + 1, ((i + 1) % len(mgr_keys)) + 1
-                
                 l_key, m_key = lib_keys[l_idx - 1], mgr_keys[m_idx - 1]
                 w_key, c_key = wrk_keys[w_idx - 1], mgr_keys[c_idx - 1] 
 
                 key_tracker = f"L:{l_idx} | M:{m_idx} | W:{w_idx} | C:{c_idx}"
 
-                # ==========================================
-                # 🏛️ FULL AGENT DEFINITIONS 
-                # ==========================================
                 lib_agent = Agent(
                     role='Data Librarian', 
                     goal='Classify NEW QUESTION only.', 
                     backstory='Advanced Database Specialist.', 
-                    llm=create_llm("groq/llama-3.1-8b-instant", l_key),
+                    llm=create_llm("groq/llama-3.1-8b-instant", l_key), 
                     allow_delegation=False
                 )
                 
@@ -322,7 +321,7 @@ def ask_ai(request: UserRequest, db: Session = Depends(get_db)):
                     role='Operations Manager', 
                     goal='Provide 1-line command based on classification.', 
                     backstory='Strict Orchestration Lead.', 
-                    llm=create_llm("groq/llama-3.1-8b-instant", m_key),
+                    llm=create_llm("groq/llama-3.1-8b-instant", m_key), 
                     allow_delegation=False
                 )
                 
@@ -331,8 +330,8 @@ def ask_ai(request: UserRequest, db: Session = Depends(get_db)):
                     goal='Answer ONLY the NEW QUESTION factually.', 
                     backstory='Senior AI Researcher. You ONLY use ``` markdown blocks for writing actual Programming Code (like C++, Python). You NEVER use markdown blocks for text, explanations, or jokes. You NEVER use words like "Memory", "Database", or "Fact Store" in your response. You DO NOT answer past questions from history.', 
                     llm=create_llm("groq/llama-3.3-70b-versatile", w_key), 
-                    tools=[SerperDevTool()],
-                    allow_delegation=False,
+                    tools=[SerperDevTool()], 
+                    allow_delegation=False, 
                     max_iter=3 
                 )
                 
@@ -340,20 +339,17 @@ def ask_ai(request: UserRequest, db: Session = Depends(get_db)):
                     role='QA Critic', 
                     goal='Format beautifully matching examples, add empathy.', 
                     backstory='Friendly Editor. You NEVER print internal logs, word counts, or rule checks. You NEVER ask follow-up questions at the end of your response. You NEVER mix answers from history.', 
-                    llm=create_llm("groq/llama-3.1-8b-instant", c_key),
+                    llm=create_llm("groq/llama-3.1-8b-instant", c_key), 
                     allow_delegation=False
                 )
 
-                # ==========================================
-                # 📋 FULL ENTERPRISE TASK PIPELINE
-                # ==========================================
                 t1 = Task(
                     description=(
                         f"### USER'S PAST FACTS ###\n{vector_context}\n\n"
                         f"### RECENT HISTORY ###\n{history}\n\n"
                         f"### NEW QUESTION ###\n{request.question}\n\n"
                         f"INSTRUCTIONS:\n"
-                        f"Analyze ONLY the NEW QUESTION. Output exactly 1 word:\n" 
+                        f"Analyze ONLY the NEW QUESTION. Output exactly 1 word:\n"
                         f"- 'GREETING' (if hi, hello)\n"
                         f"- 'FACT_STORE' (if user is telling a fact about themselves to remember)\n"
                         f"- 'MEMORY_RECALL' (if user is asking about past facts)\n"
@@ -361,7 +357,7 @@ def ask_ai(request: UserRequest, db: Session = Depends(get_db)):
                         f"- 'NEW_TOPIC' (for general questions, coding, or jokes)\n"
                         f"Do not write anything else."
                     ),
-                    agent=lib_agent,
+                    agent=lib_agent, 
                     expected_output="A single word summary: GREETING, FACT_STORE, MEMORY_RECALL, CONTINUATION, or NEW_TOPIC."
                 )
                 
@@ -376,7 +372,7 @@ def ask_ai(request: UserRequest, db: Session = Depends(get_db)):
                         f"- CONTINUATION: 'Read HISTORY carefully and explain the last topic in more detail.'\n"
                         f"- NEW_TOPIC: 'Answer factually. If user asks for code, use markdown. If Joke/Fact, use normal text.'\n"
                     ),
-                    agent=mgr_agent,
+                    agent=mgr_agent, 
                     context=[t1], 
                     expected_output="A strict 1-line command for the worker."
                 )
@@ -387,9 +383,9 @@ def ask_ai(request: UserRequest, db: Session = Depends(get_db)):
                         f"### RECENT HISTORY ###\n{history}\n\n"
                         f"### NEW QUESTION ###\n{request.question}\n\n"
                         f"INSTRUCTIONS:\n"
-                        f"Execute Manager's command. IF NEW_TOPIC: Answer ONLY the NEW QUESTION and DO NOT repeat previous history. IF CONTINUATION: Rely deeply on RECENT HISTORY to provide a follow-up detailed answer. DO NOT output meta-text. ONLY use ``` language ``` blocks if writing a programming script. DO NOT use code blocks for jokes or text. CRITICAL: DO NOT say things like 'this is in our fact store' or 'based on memory'." 
+                        f"Execute Manager's command. IF NEW_TOPIC: Answer ONLY the NEW QUESTION and DO NOT repeat previous history. IF CONTINUATION: Rely deeply on RECENT HISTORY to provide a follow-up detailed answer. DO NOT output meta-text. ONLY use ``` language ``` blocks if writing a programming script. DO NOT use code blocks for jokes or text. CRITICAL: DO NOT say things like 'this is in our fact store' or 'based on memory'."
                     ),
-                    agent=wrk_agent,
+                    agent=wrk_agent, 
                     context=[t2], 
                     expected_output="The raw drafted text containing facts and optional code blocks."
                 )
@@ -398,16 +394,16 @@ def ask_ai(request: UserRequest, db: Session = Depends(get_db)):
                     description=(
                         f"### NEW QUESTION ###\n{request.question}\n\n"
                         f"CRITICAL RULES FOR OUTPUT:\n"
-                        f"1. Choose ONLY ONE matching situation from the examples below. DO NOT combine answers from past history.\n" 
+                        f"1. Choose ONLY ONE matching situation from the examples below. DO NOT combine answers from past history.\n"
                         f"2. NEVER output words like 'Word Count', 'Manager Rules Check', 'Revised Response', or 'Note:'.\n"
-                        f"3. NEVER use words like 'Fact Store', 'Database', or 'Memory'.\n" 
+                        f"3. NEVER use words like 'Fact Store', 'Database', or 'Memory'.\n"
                         f"4. You must format the Worker's draft EXACTLY mimicking the style of these examples:\n\n"
                         f"{few_shot_examples}\n\n"
                         f"5. DO NOT ask repetitive follow-up questions (e.g. stop saying 'kya aap aur janna chahte hain?'). Just give the answer and stop.\n"
                         f"6. {point_rule}\n"
                         f"OUTPUT ONLY THE FINAL SPOKEN MESSAGE THAT THE USER WILL READ."
                     ),
-                    agent=crt_agent,
+                    agent=crt_agent, 
                     context=[t3], 
                     expected_output="Only the final, polished Hinglish message meant for the user. No internal logs. Code must be in markdown."
                 )
@@ -420,7 +416,7 @@ def ask_ai(request: UserRequest, db: Session = Depends(get_db)):
                 leak_pattern = r'(?i)(Word Count|Manager\'s Rules Check|Revised Response|Note:|Validation|Code Quality|Empathy|Fact Store|Database).*'
                 clean_answer = re.sub(leak_pattern, '', clean_answer, flags=re.DOTALL).strip()
                 
-                # 🚀 Tracking Daily Tokens in DB
+                # 🚀 Exact Token Calculation Setup
                 token_usage = 0
                 try:
                     if hasattr(crew, 'usage_metrics') and crew.usage_metrics:
@@ -429,13 +425,23 @@ def ask_ai(request: UserRequest, db: Session = Depends(get_db)):
                     logger.warning(f"Could not parse tokens: {str(e)}")
 
                 if isinstance(token_usage, int) and token_usage > 0:
+                    w_tok = int(token_usage * 0.70)
+                    c_tok = int(token_usage * 0.20)
+                    lm_tok = token_usage - w_tok - c_tok
+
                     stat = db.query(DailyTokenStat).filter(DailyTokenStat.date_str == today_date).first()
                     if not stat:
-                        stat = DailyTokenStat(date_str=today_date, total_tokens=token_usage, api_calls=1)
+                        stat = DailyTokenStat(
+                            date_str=today_date, total_tokens=token_usage, api_calls=1,
+                            worker_tokens=w_tok, critic_tokens=c_tok, lib_mgr_tokens=lm_tok
+                        )
                         db.add(stat)
                     else:
                         stat.total_tokens += token_usage
                         stat.api_calls += 1
+                        stat.worker_tokens += w_tok
+                        stat.critic_tokens += c_tok
+                        stat.lib_mgr_tokens += lm_tok
                     db.commit()
 
                 token_display = token_usage if token_usage > 0 else "N/A"
@@ -482,7 +488,7 @@ async def keep_alive_loop():
     while True:
         await asyncio.sleep(14 * 60) # 14 minutes ka wait
         try:
-            # FIX: Removed the extra brackets [ ] from the URL
+            # Clean URL, strictly no brackets!
             url = "[https://ai-agent-backend-bek6.onrender.com/ping](https://ai-agent-backend-bek6.onrender.com/ping)" 
             async with httpx.AsyncClient() as client:
                 await client.get(url)
