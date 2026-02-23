@@ -4,6 +4,8 @@ import uuid
 import shutil
 import traceback
 import logging
+import asyncio # 🚀 NEW: Keep-Alive ke liye
+import httpx   # 🚀 NEW: Keep-Alive ke liye
 import chromadb # 🚀 Vector Database
 from google import genai 
 from datetime import datetime
@@ -125,7 +127,7 @@ def ask_ai(request: UserRequest, db: Session = Depends(get_db)):
 
     point_rule = "Format response STRICTLY in clean bullet points." if request.is_point_wise else "Use well-structured concise paragraphs."
 
-    # 🌟 FEW-SHOT EXAMPLES (The Ultimate AI Brainwash Matrix) 🌟
+    # 🌟 20 FEW-SHOT EXAMPLES (The Ultimate AI Brainwash Matrix) 🌟
     few_shot_examples = f"""
     EXAMPLE 1 (Greeting):
     User: "hi" 
@@ -418,3 +420,30 @@ def ask_ai(request: UserRequest, db: Session = Depends(get_db)):
             logger.error(f"Vector DB Save Error: {str(e)}")
 
     return {"answer": final_db_answer}
+
+# ==========================================
+# 🚀 5. KEEP-ALIVE SYSTEM (Anti-Sleep)
+# ==========================================
+@app.get("/ping")
+def ping():
+    """Yeh chota sa function server ko batayega ki wo zinda hai, bina AI ko jagaye."""
+    return {"status": "Main jag raha hoon bhai!"}
+
+async def keep_alive_loop():
+    """Yeh background worker har 14 minute mein server ko ping karega."""
+    while True:
+        await asyncio.sleep(14 * 60) # 14 minutes ka wait
+        try:
+            # 🚀 FIX: Aapka asli Render URL add kar diya gaya hai yahan
+            url = "[https://ai-agent-backend-bek6.onrender.com/ping](https://ai-agent-backend-bek6.onrender.com/ping)" 
+            async with httpx.AsyncClient() as client:
+                await client.get(url)
+                logger.info("Keep-Alive Ping Sent!")
+        except Exception as e:
+            logger.error(f"Ping failed: {str(e)}")
+
+@app.on_event("startup")
+async def startup_event():
+    """Jaise hi server start hoga, yeh ping loop chalu ho jayega."""
+    asyncio.create_task(keep_alive_loop())
+
