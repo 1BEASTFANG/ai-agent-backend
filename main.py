@@ -1,4 +1,7 @@
 import os
+import sys
+# 🚀 RENDER IMPORT FIX: Python ko force karna ki wo current folder mein files dhoondhe
+sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 import re
 import uuid
 import traceback
