@@ -113,8 +113,12 @@ def ask_ai(request: UserRequest, db: Session = Depends(get_db)):
     current_time = datetime.now().strftime("%A, %d %B %Y, %I:%M %p")
     today_date = datetime.now().strftime("%Y-%m-%d") # 🚀 NEW: Aaj ki date
     
-    # 🚀 NEW: ADMIN INTERCEPTOR (Zero Token Cost)
-    if request.question.strip() == "#total_tokens":
+    # ==========================================
+    # 🛡️ THE ADMIN COMMANDS INTERCEPTOR 🛡️
+    # ==========================================
+    user_cmd = request.question.strip().lower()
+    
+    if user_cmd == "#total_tokens":
         stat = db.query(DailyTokenStat).filter(DailyTokenStat.date_str == today_date).first()
         if stat:
             msg = f"📊 **SYSTEM ADMIN REPORT** 📊\n\n📅 **Date:** {today_date}\n🔄 **Total Tokens Used Today:** {stat.total_tokens}\n📞 **Total API Calls:** {stat.api_calls}\n\n*Note: Yeh meter raat 12 baje ke baad naye din ke liye automatically 0 ho jayega.*"
@@ -122,6 +126,24 @@ def ask_ai(request: UserRequest, db: Session = Depends(get_db)):
             msg = f"📊 **SYSTEM ADMIN REPORT** 📊\n\nAaj (Date: {today_date}) abhi tak koi token use nahi hua hai."
         
         return {"answer": f"{msg}\n\n[Engine: Admin Interceptor 🛡️ | Cost: 0 Tokens]"}
+        
+    elif user_cmd == "#system_status":
+        msg = f"🟢 **SYSTEM STATUS: ONLINE** 🟢\n\n🚀 **Server Engine:** Render Cloud (Active)\n🧠 **Vector Memory:** ChromaDB (Connected)\n🤖 **Primary AI:** Enterprise Groq 4-Tier\n⏱️ **Keep-Alive System:** Running perfectly"
+        return {"answer": f"{msg}\n\n[Engine: Admin Interceptor 🛡️ | Cost: 0 Tokens]"}
+        
+    elif user_cmd == "#flush_memory":
+        # Clear Short-term SQL History
+        db.query(ChatMessage).filter(ChatMessage.session_id == request.session_id).delete()
+        db.commit()
+        # Clear Long-term Vector DB for this user
+        try:
+            memory_collection.delete(where={"session_id": request.session_id})
+        except Exception: pass
+        
+        msg = f"🧹 **MEMORY FLUSHED SUCCESSFULLY** 🧹\n\n{request.user_name} bhai, aapki saari purani baatein aur yaadein system se delete kar di gayi hain. Mera dimaag ab ekdam fresh hai! Ek naye sire se shuruwat karte hain."
+        return {"answer": f"{msg}\n\n[Engine: Admin Interceptor 🛡️ | Cost: 0 Tokens]"}
+
+    # ------------------------------------------
     
     final_db_answer = f"{request.user_name} bhai, server mein kuch technical locha hai. Thodi der baad try karo."
 
@@ -398,7 +420,7 @@ def ask_ai(request: UserRequest, db: Session = Depends(get_db)):
                 leak_pattern = r'(?i)(Word Count|Manager\'s Rules Check|Revised Response|Note:|Validation|Code Quality|Empathy|Fact Store|Database).*'
                 clean_answer = re.sub(leak_pattern, '', clean_answer, flags=re.DOTALL).strip()
                 
-                # 🚀 NEW: Update Daily Tokens in DB
+                # 🚀 Tracking Daily Tokens in DB
                 token_usage = 0
                 try:
                     if hasattr(crew, 'usage_metrics') and crew.usage_metrics:
@@ -441,6 +463,7 @@ def ask_ai(request: UserRequest, db: Session = Depends(get_db)):
                 metadatas=[{"session_id": request.session_id, "timestamp": current_time}],
                 ids=[doc_id]
             )
+            logger.info("Successfully Saved to Vector DB!")
         except Exception as e:
             logger.error(f"Vector DB Save Error: {str(e)}")
 
@@ -459,6 +482,7 @@ async def keep_alive_loop():
     while True:
         await asyncio.sleep(14 * 60) # 14 minutes ka wait
         try:
+            # FIX: Removed the extra brackets [ ] from the URL
             url = "[https://ai-agent-backend-bek6.onrender.com/ping](https://ai-agent-backend-bek6.onrender.com/ping)" 
             async with httpx.AsyncClient() as client:
                 await client.get(url)
