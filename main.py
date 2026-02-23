@@ -119,13 +119,13 @@ def ask_ai(request: UserRequest, db: Session = Depends(get_db)):
     except Exception as e:
         logger.error(f"Vector DB Retrieve Error: {str(e)}")
 
-    # Short-term SQL History
-    past = db.query(ChatMessage).filter(ChatMessage.session_id == request.session_id).order_by(ChatMessage.id.desc()).limit(1).all()
+    # 🚀 UPDATE 1: limit(1) changed to limit(3) for context memory
+    past = db.query(ChatMessage).filter(ChatMessage.session_id == request.session_id).order_by(ChatMessage.id.desc()).limit(3).all()
     history = "\n".join([f"U: {m.user_query}\nA: {re.sub(r'\[Engine:.*?\]', '', m.ai_response).strip()}" for m in reversed(past)])
 
     point_rule = "Format response STRICTLY in clean bullet points." if request.is_point_wise else "Use well-structured concise paragraphs."
 
-    # 🌟 20 FEW-SHOT EXAMPLES (The Ultimate AI Brainwash Matrix) 🌟
+    # 🌟 FEW-SHOT EXAMPLES (The Ultimate AI Brainwash Matrix) 🌟
     few_shot_examples = f"""
     EXAMPLE 1 (Greeting):
     User: "hi" 
@@ -219,6 +219,10 @@ def ask_ai(request: UserRequest, db: Session = Depends(get_db)):
     EXAMPLE 20 (Short Acknowledgement):
     User: "ok"
     Output: "Ji {request.user_name} bhai! Kuch aur kaam ho toh batayega. 👍"
+    
+    EXAMPLE 21 (Follow-up / Explanation): 
+    User: "thoda aur aache se samjhao" OR "iske baare mein aur batao"
+    Output: "{request.user_name} bhai, bilkul! Pichli baat ko aur detail mein samjhata hoon..."
     """
 
     # ------------------------------------------
@@ -231,8 +235,7 @@ def ask_ai(request: UserRequest, db: Session = Depends(get_db)):
                 f"### USER'S PAST FACTS ###\n{vector_context}\n\n"
                 f"### RECENT HISTORY ###\n{history}\n\n"
                 f"### USER QUESTION ###\n{request.question}\n\n"
-                # 🚀 FIX: explicitly telling it not to repeat history
-                f"### RULES ###\n{point_rule}\nAnswer ONLY the CURRENT QUESTION in friendly natural Hinglish concisely. DO NOT repeat the history. DO NOT combine greetings with factual answers. DO NOT ask follow-up questions. Address user as {request.user_name}."
+                f"### RULES ###\n{point_rule}\nAnswer the CURRENT QUESTION in friendly natural Hinglish concisely. If it is a follow-up, use the HISTORY to expand on the topic. Otherwise, DO NOT repeat the history. DO NOT combine greetings with factual answers. DO NOT ask follow-up questions. Address user as {request.user_name}."
             )
             response = gemini_client.models.generate_content(model='gemini-1.5-flash', contents=prompt)
             clean_answer = response.text.strip()
@@ -265,7 +268,7 @@ def ask_ai(request: UserRequest, db: Session = Depends(get_db)):
                 # ==========================================
                 lib_agent = Agent(
                     role='Data Librarian', 
-                    goal='Classify NEW QUESTION only.', # 🚀 FIX
+                    goal='Classify NEW QUESTION only.', 
                     backstory='Advanced Database Specialist.', 
                     llm=create_llm("groq/llama-3.1-8b-instant", l_key),
                     allow_delegation=False
@@ -281,8 +284,8 @@ def ask_ai(request: UserRequest, db: Session = Depends(get_db)):
                 
                 wrk_agent = Agent(
                     role='Elite Worker', 
-                    goal='Answer ONLY the NEW QUESTION factually.', # 🚀 FIX
-                    backstory='Senior AI Researcher. You ONLY use ``` markdown blocks for writing actual Programming Code (like C++, Python). You NEVER use markdown blocks for text, explanations, or jokes. You NEVER use words like "Memory", "Database", or "Fact Store" in your response. You DO NOT answer past questions from history.', # 🚀 FIX
+                    goal='Answer ONLY the NEW QUESTION factually.', 
+                    backstory='Senior AI Researcher. You ONLY use ``` markdown blocks for writing actual Programming Code (like C++, Python). You NEVER use markdown blocks for text, explanations, or jokes. You NEVER use words like "Memory", "Database", or "Fact Store" in your response. You DO NOT answer past questions from history.', 
                     llm=create_llm("groq/llama-3.3-70b-versatile", w_key), 
                     tools=[SerperDevTool()],
                     allow_delegation=False,
@@ -292,7 +295,7 @@ def ask_ai(request: UserRequest, db: Session = Depends(get_db)):
                 crt_agent = Agent(
                     role='QA Critic', 
                     goal='Format beautifully matching examples, add empathy.', 
-                    backstory='Friendly Editor. You NEVER print internal logs, word counts, or rule checks. You NEVER ask follow-up questions at the end of your response. You NEVER mix answers from history.', # 🚀 FIX
+                    backstory='Friendly Editor. You NEVER print internal logs, word counts, or rule checks. You NEVER ask follow-up questions at the end of your response. You NEVER mix answers from history.', 
                     llm=create_llm("groq/llama-3.1-8b-instant", c_key),
                     allow_delegation=False
                 )
@@ -300,23 +303,26 @@ def ask_ai(request: UserRequest, db: Session = Depends(get_db)):
                 # ==========================================
                 # 📋 FULL ENTERPRISE TASK PIPELINE
                 # ==========================================
+                # 🚀 UPDATE 2: Added CONTINUATION capability to Librarian
                 t1 = Task(
                     description=(
                         f"### USER'S PAST FACTS ###\n{vector_context}\n\n"
                         f"### RECENT HISTORY ###\n{history}\n\n"
                         f"### NEW QUESTION ###\n{request.question}\n\n"
                         f"INSTRUCTIONS:\n"
-                        f"Analyze ONLY the NEW QUESTION. Output exactly 1 word:\n" # 🚀 FIX
+                        f"Analyze ONLY the NEW QUESTION. Output exactly 1 word:\n" 
                         f"- 'GREETING' (if hi, hello)\n"
                         f"- 'FACT_STORE' (if user is telling a fact about themselves to remember)\n"
                         f"- 'MEMORY_RECALL' (if user is asking about past facts)\n"
+                        f"- 'CONTINUATION' (if user asks to explain more, give examples, or refers to the previous message)\n"
                         f"- 'NEW_TOPIC' (for general questions, coding, or jokes)\n"
                         f"Do not write anything else."
                     ),
                     agent=lib_agent,
-                    expected_output="A single word summary: GREETING, FACT_STORE, MEMORY_RECALL, or NEW_TOPIC."
+                    expected_output="A single word summary: GREETING, FACT_STORE, MEMORY_RECALL, CONTINUATION, or NEW_TOPIC."
                 )
                 
+                # 🚀 UPDATE 3: Manager handles CONTINUATION
                 t2 = Task(
                     description=(
                         f"### NEW QUESTION ###\n{request.question}\n\n"
@@ -325,6 +331,7 @@ def ask_ai(request: UserRequest, db: Session = Depends(get_db)):
                         f"- GREETING: 'Say a friendly hello.'\n"
                         f"- FACT_STORE: 'Acknowledge the fact in 1 simple sentence only.'\n"
                         f"- MEMORY_RECALL: 'Answer directly using PAST FACTS only. DO NOT explain.'\n"
+                        f"- CONTINUATION: 'Read HISTORY carefully and explain the last topic in more detail.'\n"
                         f"- NEW_TOPIC: 'Answer factually. If user asks for code, use markdown. If Joke/Fact, use normal text.'\n"
                     ),
                     agent=mgr_agent,
@@ -332,12 +339,14 @@ def ask_ai(request: UserRequest, db: Session = Depends(get_db)):
                     expected_output="A strict 1-line command for the worker."
                 )
                 
+                # 🚀 UPDATE 4: Worker gets ### RECENT HISTORY ### directly so it can actually explain further
                 t3 = Task(
                     description=(
                         f"### USER'S PAST FACTS ###\n{vector_context}\n\n"
+                        f"### RECENT HISTORY ###\n{history}\n\n"
                         f"### NEW QUESTION ###\n{request.question}\n\n"
                         f"INSTRUCTIONS:\n"
-                        f"Execute Manager's command to answer ONLY the NEW QUESTION. DO NOT output meta-text. ONLY use ``` language ``` blocks if writing a programming script. DO NOT use code blocks for jokes or text. DO NOT repeat or answer anything from the previous history. CRITICAL: DO NOT say things like 'this is in our fact store' or 'based on memory'." # 🚀 FIX
+                        f"Execute Manager's command. IF NEW_TOPIC: Answer ONLY the NEW QUESTION and DO NOT repeat previous history. IF CONTINUATION: Rely deeply on RECENT HISTORY to provide a follow-up detailed answer. DO NOT output meta-text. ONLY use ``` language ``` blocks if writing a programming script. DO NOT use code blocks for jokes or text. CRITICAL: DO NOT say things like 'this is in our fact store' or 'based on memory'." 
                     ),
                     agent=wrk_agent,
                     context=[t2], 
@@ -348,9 +357,9 @@ def ask_ai(request: UserRequest, db: Session = Depends(get_db)):
                     description=(
                         f"### NEW QUESTION ###\n{request.question}\n\n"
                         f"CRITICAL RULES FOR OUTPUT:\n"
-                        f"1. Choose ONLY ONE matching situation from the examples below. DO NOT combine answers from past history.\n" # 🚀 FIX
+                        f"1. Choose ONLY ONE matching situation from the examples below. DO NOT combine answers from past history.\n" 
                         f"2. NEVER output words like 'Word Count', 'Manager Rules Check', 'Revised Response', or 'Note:'.\n"
-                        f"3. NEVER use words like 'Fact Store', 'Database', or 'Memory'.\n" # 🚀 FIX
+                        f"3. NEVER use words like 'Fact Store', 'Database', or 'Memory'.\n" 
                         f"4. You must format the Worker's draft EXACTLY mimicking the style of these examples:\n\n"
                         f"{few_shot_examples}\n\n"
                         f"5. DO NOT ask repetitive follow-up questions (e.g. stop saying 'kya aap aur janna chahte hain?'). Just give the answer and stop.\n"
@@ -367,7 +376,7 @@ def ask_ai(request: UserRequest, db: Session = Depends(get_db)):
                 
                 clean_answer = str(result).strip()
 
-                # 🚀 FIX: The strict safety net now deletes "Fact Store" and "Database"
+                # 🚀 THE SAFETY NET: Strip out any leaked meta-text generated by the Critic
                 leak_pattern = r'(?i)(Word Count|Manager\'s Rules Check|Revised Response|Note:|Validation|Code Quality|Empathy|Fact Store|Database).*'
                 clean_answer = re.sub(leak_pattern, '', clean_answer, flags=re.DOTALL).strip()
                 
