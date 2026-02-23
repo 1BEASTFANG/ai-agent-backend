@@ -27,21 +27,23 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger(__name__)
 
 # --- MONGODB DATABASE SETUP (Permanent Memory) ---
-# 🚀 FIX: Aapka diya hua MongoDB URL
-MONGO_URL = "mongodb+srv://ny8331167_db_user:nikhil_admin@cluster0.ymd4zda.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0"
+# 🚀 SECURE FIX: MongoDB URL ab Render environment variables se aayega
+MONGO_URL = os.getenv("MONGO_URL")
+
+if not MONGO_URL:
+    logger.error("🚨 CRITICAL: MONGO_URL environment variable is missing in Render!")
 
 try:
-    mongo_client = MongoClient(MONGO_URL)
-    # Ping the database to check connection
-    mongo_client.admin.command('ping')
-    logger.info("Successfully connected to MongoDB Atlas! 🎉")
+    if MONGO_URL:
+        mongo_client = MongoClient(MONGO_URL)
+        mongo_client.admin.command('ping')
+        logger.info("Successfully connected to MongoDB Atlas! 🎉")
+        
+        db_mongo = mongo_client["ai_assistant_db"]
+        messages_col = db_mongo["messages"]
+        token_stats_col = db_mongo["token_stats_v2"]
 except Exception as e:
     logger.error(f"MongoDB Connection Failed: {e}")
-
-# Database and Collections
-db_mongo = mongo_client["ai_assistant_db"]
-messages_col = db_mongo["messages"]
-token_stats_col = db_mongo["token_stats_v2"]
 
 app = FastAPI()
 
@@ -96,6 +98,7 @@ class UserRequest(BaseModel):
 # ==========================================
 # 🧠 4. MAIN API ENDPOINT (Full Enterprise RAG Pipeline)
 # ==========================================
+# 🚀 FIX: Removed SQLite Depends(get_db) connection
 @app.post("/ask")
 def ask_ai(request: UserRequest):
     current_time = datetime.now().strftime("%A, %d %B %Y, %I:%M %p")
@@ -107,8 +110,11 @@ def ask_ai(request: UserRequest):
     user_cmd = request.question.strip().lower()
     
     if user_cmd == "#total_tokens":
-        # MongoDB se fetch karna
-        stat = token_stats_col.find_one({"date_str": today_date})
+        if MONGO_URL:
+            stat = token_stats_col.find_one({"date_str": today_date})
+        else:
+            stat = None
+            
         if stat:
             msg = (f"📊 **SYSTEM ADMIN REPORT** 📊\n\n"
                    f"📅 **Date:** {today_date}\n"
@@ -129,9 +135,8 @@ def ask_ai(request: UserRequest):
         return {"answer": f"{msg}\n\n[Engine: Admin Interceptor 🛡️ | Cost: 0 Tokens]"}
         
     elif user_cmd == "#flush_memory":
-        # Clear MongoDB History for this user
-        messages_col.delete_many({"session_id": request.session_id})
-        # Clear Long-term Vector DB for this user
+        if MONGO_URL:
+            messages_col.delete_many({"session_id": request.session_id})
         try:
             memory_collection.delete(where={"session_id": request.session_id})
         except Exception: pass
@@ -159,10 +164,12 @@ def ask_ai(request: UserRequest):
     except Exception as e:
         logger.error(f"Vector DB Retrieve Error: {str(e)}")
 
-    # 🚀 Get History from MongoDB
-    past_messages = list(messages_col.find({"session_id": request.session_id}).sort("_id", -1).limit(3))
-    past_messages.reverse() # Aakhri message sabse niche aaye isliye reverse
-    history = "\n".join([f"U: {m['user_query']}\nA: {re.sub(r'\[Engine:.*?\]', '', m['ai_response']).strip()}" for m in past_messages])
+    # 🚀 Fetch history from MongoDB
+    history = ""
+    if MONGO_URL:
+        past_messages = list(messages_col.find({"session_id": request.session_id}).sort("_id", -1).limit(3))
+        past_messages.reverse()
+        history = "\n".join([f"U: {m['user_query']}\nA: {re.sub(r'\[Engine:.*?\]', '', m['ai_response']).strip()}" for m in past_messages])
 
     point_rule = "Format response STRICTLY in clean bullet points." if request.is_point_wise else "Use well-structured concise paragraphs."
 
@@ -202,24 +209,11 @@ def ask_ai(request: UserRequest):
 
     EXAMPLE 9 (Coding 1 - STRICT MARKDOWN):
     User: "Python mein loop kaise likhe?"
-    Output: "{request.user_name} bhai, yeh raha aapka code:
-    ```python
-    for i in range(5):
-        print(i)
-    ```
-    Is code se aap 0 se 4 tak print kar sakte hain. 🚀"
+    Output: "{request.user_name} bhai, yeh raha aapka code:\n```python\nfor i in range(5):\n    print(i)\n```\nIs code se aap 0 se 4 tak print kar sakte hain. 🚀"
 
     EXAMPLE 10 (Coding 2 - STRICT MARKDOWN):
     User: "C++ hello world"
-    Output: "Yeh lijiye {request.user_name} bhai:
-    ```cpp
-    #include <iostream>
-    int main() {{
-        std::cout << \"Hello World!\";
-        return 0;
-    }}
-    ```
-    Bilkul simple aur basic! 💻"
+    Output: "Yeh lijiye {request.user_name} bhai:\n```cpp\n#include <iostream>\nint main() {{\n    std::cout << \"Hello World!\";\n    return 0;\n}}\n```\nBilkul simple aur basic! 💻"
 
     EXAMPLE 11 (General Knowledge 1):
     User: "Taj Mahal kahan hai?"
@@ -425,12 +419,12 @@ def ask_ai(request: UserRequest):
                 except Exception as e:
                     logger.warning(f"Could not parse tokens: {str(e)}")
 
-                if isinstance(token_usage, int) and token_usage > 0:
+                if isinstance(token_usage, int) and token_usage > 0 and MONGO_URL:
                     w_tok = int(token_usage * 0.70)
                     c_tok = int(token_usage * 0.20)
                     lm_tok = token_usage - w_tok - c_tok
 
-                    # MongoDB Token Update
+                    # Update directly into MongoDB
                     token_stats_col.update_one(
                         {"date_str": today_date},
                         {"$inc": {
@@ -449,7 +443,7 @@ def ask_ai(request: UserRequest):
                 break 
                 
             except Exception as e:
-                logger.error(f"Groq Loop Failed on attempt {i+1}: {traceback.format_exc()}")
+                logger.error(f"Groq Loop Failed on attempt {i+1}: {str(e)}")
                 if i == len(wrk_keys) - 1:
                     final_db_answer = f"{request.user_name} bhai, Groq ki saari keys ki limit exhaust ho gayi hai. Kripya Gemini mode try karein."
                 continue
@@ -457,13 +451,16 @@ def ask_ai(request: UserRequest):
     # ------------------------------------------
     # 💾 SAVE TO MONGODB & VECTOR DATABASE
     # ------------------------------------------
-    # 🚀 Save chat to MongoDB
-    messages_col.insert_one({
-        "session_id": request.session_id,
-        "user_query": request.question,
-        "ai_response": final_db_answer,
-        "timestamp": current_time
-    })
+    if MONGO_URL and clean_answer and "Error" not in clean_answer:
+        try:
+            messages_col.insert_one({
+                "session_id": request.session_id,
+                "user_query": request.question,
+                "ai_response": final_db_answer,
+                "timestamp": current_time
+            })
+        except Exception as e:
+            logger.error(f"MongoDB Save Error: {str(e)}")
 
     if clean_answer and "Error" not in clean_answer:
         try:
@@ -492,7 +489,7 @@ async def keep_alive_loop():
     while True:
         await asyncio.sleep(14 * 60) # 14 minutes ka wait
         try:
-            # 🚀 Clean URL FIX (Brackets Hata Diye Gaye Hain)
+            # 🚀 Clean URL FIX (Bina kisi extra bracket ke)
             url = "[https://ai-agent-backend-bek6.onrender.com/ping](https://ai-agent-backend-bek6.onrender.com/ping)" 
             async with httpx.AsyncClient() as client:
                 await client.get(url)
