@@ -1,22 +1,23 @@
 import os
 import re
 import uuid
-import shutil
 import traceback
 import logging
 import asyncio 
 import httpx   
-import chromadb 
-import certifi # 🚀 NEW: SSL Handshake fix ke liye
+import certifi 
+from pinecone import Pinecone # 🚀 V15: Pinecone replaces ChromaDB for Cloud Memory
 from google import genai 
 from datetime import datetime
 from fastapi import FastAPI
-from fastapi.responses import FileResponse 
 from pydantic import BaseModel
-from pymongo import MongoClient # 🚀 NEW: MongoDB Connector
+from pymongo import MongoClient 
 
 from crewai import Agent, Task, Crew, LLM
 from crewai_tools import SerperDevTool
+
+# 🚀 NAYI FILE SE EXAMPLES IMPORT KAR RAHE HAIN
+from prompts import get_few_shot_examples 
 
 # ==========================================
 # 🚀 1. ENTERPRISE SETTINGS & LOGGING
@@ -27,22 +28,14 @@ os.environ["OTEL_SDK_DISABLED"] = "true"
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
-# --- MONGODB DATABASE SETUP (Permanent Memory) ---
-# 🚀 SECURE FIX: MongoDB URL ab Render environment variables se aayega
+# --- MONGODB DATABASE SETUP (Chat & Token Memory) ---
 MONGO_URL = os.getenv("MONGO_URL")
-
 if not MONGO_URL:
     logger.error("🚨 CRITICAL: MONGO_URL environment variable is missing in Render!")
 
 try:
     if MONGO_URL:
-        # 🚀 FIX: Added tlsAllowInvalidCertificates=True and tlsCAFile to FORCE fix the SSL Error
-        mongo_client = MongoClient(
-            MONGO_URL, 
-            tls=True, 
-            tlsCAFile=certifi.where(),
-            tlsAllowInvalidCertificates=True
-        )
+        mongo_client = MongoClient(MONGO_URL, tls=True, tlsCAFile=certifi.where(), tlsAllowInvalidCertificates=True)
         mongo_client.admin.command('ping')
         logger.info("Successfully connected to MongoDB Atlas! 🎉")
         
@@ -52,38 +45,43 @@ try:
 except Exception as e:
     logger.error(f"MongoDB Connection Failed: {e}")
 
+# --- PINECONE DATABASE SETUP (Long Term Fact Memory) ---
+PINECONE_API_KEY = os.getenv("PINECONE_API_KEY")
+PINECONE_HOST = os.getenv("PINECONE_HOST")
+
+index = None
+try:
+    if PINECONE_API_KEY and PINECONE_HOST:
+        pc = Pinecone(api_key=PINECONE_API_KEY)
+        index = pc.Index(host=PINECONE_HOST)
+        logger.info("Successfully connected to Pinecone Cloud Vector DB! 🌲")
+    else:
+        logger.warning("Pinecone keys missing. Long-term memory will not work.")
+except Exception as e:
+    logger.error(f"Pinecone Setup Error: {e}")
+
 app = FastAPI()
 
 # ==========================================
-# 🧠 2. VECTOR DATABASE (ChromaDB)
-# ==========================================
-CHROMA_PATH = "./chroma_memory_db"
-chroma_client = chromadb.PersistentClient(path=CHROMA_PATH)
-memory_collection = chroma_client.get_or_create_collection(name="ai_long_term_memory")
-
-# 🚀 Memory Download Endpoint
-@app.get("/download-memory")
-def download_memory():
-    """Zips the ChromaDB folder and provides it as a download."""
-    try:
-        output_filename = "ai_vector_memory_backup"
-        shutil.make_archive(output_filename, 'zip', CHROMA_PATH)
-        logger.info(f"Memory backup created: {output_filename}.zip")
-        return FileResponse(
-            path=f"{output_filename}.zip", 
-            media_type='application/zip', 
-            filename=f"{output_filename}.zip"
-        )
-    except Exception as e:
-        return {"error": f"Download failed: {str(e)}"}
-
-# ==========================================
-# ⚡ 3. ENGINES & LLM TOOLS
+# ⚡ 2. ENGINES, TOOLS & EMBEDDINGS
 # ==========================================
 gemini_api_key = os.getenv("GEMINI_API_KEY", "").strip()
 gemini_client = None
 if gemini_api_key:
     gemini_client = genai.Client(api_key=gemini_api_key)
+
+# 🚀 Gemini Embeddings (Saves RAM, replaces local models)
+def get_embedding(text):
+    try:
+        response = gemini_client.models.embed_content(model="text-embedding-004", contents=text)
+        emb = response.embeddings[0].values
+        # Pad or truncate to match 384 dimensions (Pinecone requirement)
+        if len(emb) > 384: emb = emb[:384]
+        elif len(emb) < 384: emb = emb + [0.0] * (384 - len(emb))
+        return emb
+    except Exception as e:
+        logger.error(f"Embedding Error: {e}")
+        return [0.0] * 384 
 
 def get_groq_keys(role):
     if role == "librarian": start, end = 1, 6
@@ -103,9 +101,8 @@ class UserRequest(BaseModel):
     is_point_wise: bool = False 
 
 # ==========================================
-# 🧠 4. MAIN API ENDPOINT (Full Enterprise RAG Pipeline)
+# 🧠 3. MAIN API ENDPOINT (Full Enterprise RAG Pipeline)
 # ==========================================
-# 🚀 FIX: Removed SQLite Depends(get_db) connection
 @app.post("/ask")
 def ask_ai(request: UserRequest):
     current_time = datetime.now().strftime("%A, %d %B %Y, %I:%M %p")
@@ -119,8 +116,7 @@ def ask_ai(request: UserRequest):
     if user_cmd == "#total_tokens":
         if MONGO_URL:
             stat = token_stats_col.find_one({"date_str": today_date})
-        else:
-            stat = None
+        else: stat = None
             
         if stat:
             msg = (f"📊 **SYSTEM ADMIN REPORT** 📊\n\n"
@@ -134,42 +130,35 @@ def ask_ai(request: UserRequest):
                    f"*Note: Yeh meter raat 12 baje ke baad automatically 0 ho jayega.*")
         else:
             msg = f"📊 **SYSTEM ADMIN REPORT** 📊\n\nAaj (Date: {today_date}) abhi tak koi token use nahi hua hai."
-        
         return {"answer": f"{msg}\n\n[Engine: Admin Interceptor 🛡️ | Cost: 0 Tokens]"}
         
     elif user_cmd == "#system_status":
-        msg = f"🟢 **SYSTEM STATUS: ONLINE** 🟢\n\n🚀 **Server Engine:** Render Cloud (Active)\n🧠 **Vector Memory:** ChromaDB (Connected)\n💾 **Database:** MongoDB Atlas (Connected)\n🤖 **Primary AI:** Enterprise Groq 4-Tier\n⏱️ **Keep-Alive System:** Running perfectly"
+        msg = f"🟢 **SYSTEM STATUS: ONLINE (V15)** 🟢\n\n🚀 **Server Engine:** Render Cloud (Active)\n🧠 **Vector Memory:** Pinecone Cloud (Connected)\n💾 **Database:** MongoDB Atlas (Connected)\n🤖 **Primary AI:** Enterprise Groq 4-Tier\n⏱️ **Keep-Alive System:** Running perfectly"
         return {"answer": f"{msg}\n\n[Engine: Admin Interceptor 🛡️ | Cost: 0 Tokens]"}
         
     elif user_cmd == "#flush_memory":
-        if MONGO_URL:
-            messages_col.delete_many({"session_id": request.session_id})
+        if MONGO_URL: messages_col.delete_many({"session_id": request.session_id})
         try:
-            memory_collection.delete(where={"session_id": request.session_id})
+            if index: index.delete(delete_all=True, namespace=request.session_id)
         except Exception: pass
-        
         msg = f"🧹 **MEMORY FLUSHED SUCCESSFULLY** 🧹\n\n{request.user_name} bhai, aapki saari purani baatein aur yaadein system se delete kar di gayi hain. Mera dimaag ab ekdam fresh hai! Ek naye sire se shuruwat karte hain."
         return {"answer": f"{msg}\n\n[Engine: Admin Interceptor 🛡️ | Cost: 0 Tokens]"}
 
-    # ------------------------------------------
-    
     final_db_answer = f"{request.user_name} bhai, server mein kuch technical locha hai. Thodi der baad try karo."
 
     # ------------------------------------------
-    # 🔍 RAG: Deep Context Retrieval
+    # 🔍 RAG: Deep Context Retrieval (From Pinecone)
     # ------------------------------------------
     vector_context = "No relevant past facts found."
     try:
-        results = memory_collection.query(
-            query_texts=[request.question],
-            n_results=2, 
-            where={"session_id": request.session_id}
-        )
-        if results and results['documents'] and results['documents'][0]:
-            vector_context = "\n---\n".join(results['documents'][0])
-            logger.info("Vector Context Retrieved Successfully!")
+        if index:
+            query_vector = get_embedding(request.question)
+            results = index.query(vector=query_vector, top_k=2, include_metadata=True, namespace=request.session_id)
+            if results and results.get('matches'):
+                vector_context = "\n---\n".join([match['metadata']['text'] for match in results['matches']])
+                logger.info("Pinecone Vector Context Retrieved Successfully!")
     except Exception as e:
-        logger.error(f"Vector DB Retrieve Error: {str(e)}")
+        logger.error(f"Pinecone Retrieve Error: {str(e)}")
 
     # 🚀 Fetch history from MongoDB
     history = ""
@@ -180,92 +169,8 @@ def ask_ai(request: UserRequest):
 
     point_rule = "Format response STRICTLY in clean bullet points." if request.is_point_wise else "Use well-structured concise paragraphs."
 
-    # 🌟 20 FEW-SHOT EXAMPLES (The Ultimate AI Brainwash Matrix) 🌟
-    few_shot_examples = f"""
-    EXAMPLE 1 (Greeting):
-    User: "hi" 
-    Output: "{request.user_name} bhai, namaste! 🌟 Kahiye kaise aana hua?"
-
-    EXAMPLE 2 (Greeting 2):
-    User: "kaise ho?" 
-    Output: "Main ekdam badhiya hoon, {request.user_name} bhai! Aap sunaiye, kya chal raha hai? 😊"
-
-    EXAMPLE 3 (Storing Fact 1):
-    User: "mera college ANDC hai"
-    Output: "Done {request.user_name} bhai! 🏫 Maine yaad kar liya hai ki aap ANDC college mein padhte hain."
-
-    EXAMPLE 4 (Storing Fact 2):
-    User: "mujhe cricket pasand hai"
-    Output: "Noted {request.user_name} bhai! 🏏 Maine save kar liya hai ki aapko Cricket pasand hai."
-
-    EXAMPLE 5 (Storing Fact 3):
-    User: "main delhi mein rehta hoon"
-    Output: "Theek hai {request.user_name} bhai! 📍 Yaad rahega ki aap Delhi se hain."
-
-    EXAMPLE 6 (Recalling Fact 1):
-    User: "mera college kaunsa hai?"
-    Output: "{request.user_name} bhai, aap ANDC college mein padhte hain! 🎓"
-
-    EXAMPLE 7 (Recalling Fact 2):
-    User: "mera favourite sports kya tha?"
-    Output: "Aapka favourite sports Cricket hai, {request.user_name} bhai! 🏏"
-
-    EXAMPLE 8 (Recalling Fact 3):
-    User: "main kahan rehta hoon?"
-    Output: "Aap Delhi mein rehte hain, {request.user_name} bhai! 🏙️"
-
-    EXAMPLE 9 (Coding 1 - STRICT MARKDOWN):
-    User: "Python mein loop kaise likhe?"
-    Output: "{request.user_name} bhai, yeh raha aapka code:\n```python\nfor i in range(5):\n    print(i)\n```\nIs code se aap 0 se 4 tak print kar sakte hain. 🚀"
-
-    EXAMPLE 10 (Coding 2 - STRICT MARKDOWN):
-    User: "C++ hello world"
-    Output: "Yeh lijiye {request.user_name} bhai:\n```cpp\n#include <iostream>\nint main() {{\n    std::cout << \"Hello World!\";\n    return 0;\n}}\n```\nBilkul simple aur basic! 💻"
-
-    EXAMPLE 11 (General Knowledge 1):
-    User: "Taj Mahal kahan hai?"
-    Output: "{request.user_name} ji, Taj Mahal Agra, Uttar Pradesh mein sthit hai. 🕌"
-
-    EXAMPLE 12 (General Knowledge 2):
-    User: "Cyclone kin rajyon mein aaya tha?"
-    Output: "{request.user_name} bhai, cyclone zyada tar Odisha, West Bengal, aur Andhra Pradesh jaise tatiye (coastal) rajyon mein aata hai. 🌪️"
-
-    EXAMPLE 13 (Joke/Humor - NO CODE BLOCK):
-    User: "ek joke sunao"
-    Output: "{request.user_name} bhai, suniye: Teacher ne pucha, 'Homework kyun nahi kiya?' Baccha bola, 'Kyunki main hostel mein rehta hoon!' 😂"
-
-    EXAMPLE 14 (Poetry/Story - NO CODE BLOCK):
-    User: "sher sunao"
-    Output: "Irshaad {request.user_name} bhai! 🌹\nAsmaan mein udte hue parinde se kisi ne poocha...\n'Kya tumhe zameen par girne ka darr nahi?'\nParinde ne muskurakar kaha, 'Main toh udta hi zameen se juda hoon!'"
-
-    EXAMPLE 15 (Math):
-    User: "2+2 kya hota hai?"
-    Output: "{request.user_name} bhai, 2+2 ka jawab 4 hota hai. 🔢"
-
-    EXAMPLE 16 (Translation):
-    User: "hello ko hindi mein kya kehte hain?"
-    Output: "Hello ko Hindi mein 'Namaste' (नमस्ते) kehte hain, {request.user_name} bhai! 🙏"
-
-    EXAMPLE 17 (Clarification):
-    User: "kya karu?"
-    Output: "{request.user_name} bhai, kis baare mein? Thoda detail mein batayenge toh main achhe se madad kar paunga. 🤔"
-
-    EXAMPLE 18 (Opinion - Neutral):
-    User: "tumhe kya pasand hai?"
-    Output: "Main ek AI hoon {request.user_name} bhai, meri apni koi pasand nahi hoti. Par aapse baat karke achha lagta hai! 🤖"
-
-    EXAMPLE 19 (Safety/Refusal):
-    User: "kisi ka password kaise hack karein?"
-    Output: "Maaf karna {request.user_name} bhai, main hacking ya illegal cheezon mein madad nahi kar sakta. Kuch aur seekhna ho toh batayiye! 🛡️"
-
-    EXAMPLE 20 (Short Acknowledgement):
-    User: "ok"
-    Output: "Ji {request.user_name} bhai! Kuch aur kaam ho toh batayega. 👍"
-    
-    EXAMPLE 21 (Follow-up / Explanation): 
-    User: "thoda aur aache se samjhao" OR "iske baare mein aur batao"
-    Output: "{request.user_name} bhai, bilkul! Pichli baat ko aur detail mein samjhata hoon..."
-    """
+    # 🚀 NAYI FILE SE EXAMPLES LOAD KARNA
+    few_shot_examples = get_few_shot_examples(request.user_name)
 
     # ------------------------------------------
     # ⚡ FAST PATH: NATIVE GEMINI
@@ -281,7 +186,7 @@ def ask_ai(request: UserRequest):
             )
             response = gemini_client.models.generate_content(model='gemini-1.5-flash', contents=prompt)
             clean_answer = response.text.strip()
-            final_db_answer = f"{clean_answer}\n\n[Engine: Native Gemini ⚡ | Vector DB 🧠]"
+            final_db_answer = f"{clean_answer}\n\n[Engine: Native Gemini ⚡ | Pinecone DB 🌲]"
         except Exception as e:
             clean_answer = "Error"
             final_db_answer = f"Gemini Error: {str(e)}"
@@ -297,155 +202,44 @@ def ask_ai(request: UserRequest):
         success = False
         for i in range(len(wrk_keys)):
             try:
-                # 🔄 Round-Robin Key Management
                 l_idx, m_idx, w_idx, c_idx = (i % len(lib_keys)) + 1, (i % len(mgr_keys)) + 1, i + 1, ((i + 1) % len(mgr_keys)) + 1
-                
                 l_key, m_key = lib_keys[l_idx - 1], mgr_keys[m_idx - 1]
                 w_key, c_key = wrk_keys[w_idx - 1], mgr_keys[c_idx - 1] 
 
                 key_tracker = f"L:{l_idx} | M:{m_idx} | W:{w_idx} | C:{c_idx}"
 
-                # ==========================================
-                # 🏛️ FULL AGENT DEFINITIONS 
-                # ==========================================
-                lib_agent = Agent(
-                    role='Data Librarian', 
-                    goal='Classify NEW QUESTION only.', 
-                    backstory='Advanced Database Specialist.', 
-                    llm=create_llm("groq/llama-3.1-8b-instant", l_key),
-                    allow_delegation=False
-                )
-                
-                mgr_agent = Agent(
-                    role='Operations Manager', 
-                    goal='Provide 1-line command based on classification.', 
-                    backstory='Strict Orchestration Lead.', 
-                    llm=create_llm("groq/llama-3.1-8b-instant", m_key),
-                    allow_delegation=False
-                )
-                
-                wrk_agent = Agent(
-                    role='Elite Worker', 
-                    goal='Answer ONLY the NEW QUESTION factually.', 
-                    backstory='Senior AI Researcher. You ONLY use ``` markdown blocks for writing actual Programming Code (like C++, Python). You NEVER use markdown blocks for text, explanations, or jokes. You NEVER use words like "Memory", "Database", or "Fact Store" in your response. You DO NOT answer past questions from history.', 
-                    llm=create_llm("groq/llama-3.3-70b-versatile", w_key), 
-                    tools=[SerperDevTool()],
-                    allow_delegation=False,
-                    max_iter=3 
-                )
-                
-                crt_agent = Agent(
-                    role='QA Critic', 
-                    goal='Format beautifully matching examples, add empathy.', 
-                    backstory='Friendly Editor. You NEVER print internal logs, word counts, or rule checks. You NEVER ask follow-up questions at the end of your response. You NEVER mix answers from history.', 
-                    llm=create_llm("groq/llama-3.1-8b-instant", c_key),
-                    allow_delegation=False
-                )
+                lib_agent = Agent(role='Data Librarian', goal='Classify NEW QUESTION only.', backstory='Advanced Database Specialist.', llm=create_llm("groq/llama-3.1-8b-instant", l_key), allow_delegation=False)
+                mgr_agent = Agent(role='Operations Manager', goal='Provide 1-line command based on classification.', backstory='Strict Orchestration Lead.', llm=create_llm("groq/llama-3.1-8b-instant", m_key), allow_delegation=False)
+                wrk_agent = Agent(role='Elite Worker', goal='Answer ONLY the NEW QUESTION factually.', backstory='Senior AI Researcher. You ONLY use ``` markdown blocks for writing actual Programming Code (like C++, Python). You NEVER use markdown blocks for text, explanations, or jokes. You NEVER use words like "Memory", "Database", or "Fact Store" in your response. You DO NOT answer past questions from history.', llm=create_llm("groq/llama-3.3-70b-versatile", w_key), tools=[SerperDevTool()], allow_delegation=False, max_iter=3)
+                crt_agent = Agent(role='QA Critic', goal='Format beautifully matching examples, add empathy.', backstory='Friendly Editor. You NEVER print internal logs, word counts, or rule checks. You NEVER ask follow-up questions at the end of your response. You NEVER mix answers from history.', llm=create_llm("groq/llama-3.1-8b-instant", c_key), allow_delegation=False)
 
-                # ==========================================
-                # 📋 FULL ENTERPRISE TASK PIPELINE
-                # ==========================================
-                t1 = Task(
-                    description=(
-                        f"### USER'S PAST FACTS ###\n{vector_context}\n\n"
-                        f"### RECENT HISTORY ###\n{history}\n\n"
-                        f"### NEW QUESTION ###\n{request.question}\n\n"
-                        f"INSTRUCTIONS:\n"
-                        f"Analyze ONLY the NEW QUESTION. Output exactly 1 word:\n" 
-                        f"- 'GREETING' (if hi, hello)\n"
-                        f"- 'FACT_STORE' (if user is telling a fact about themselves to remember)\n"
-                        f"- 'MEMORY_RECALL' (if user is asking about past facts)\n"
-                        f"- 'CONTINUATION' (if user asks to explain more, give examples, or refers to the previous message)\n"
-                        f"- 'NEW_TOPIC' (for general questions, coding, or jokes)\n"
-                        f"Do not write anything else."
-                    ),
-                    agent=lib_agent,
-                    expected_output="A single word summary: GREETING, FACT_STORE, MEMORY_RECALL, CONTINUATION, or NEW_TOPIC."
-                )
-                
-                t2 = Task(
-                    description=(
-                        f"### NEW QUESTION ###\n{request.question}\n\n"
-                        f"INSTRUCTIONS:\n"
-                        f"Based on Librarian's summary, write the command for the Worker:\n"
-                        f"- GREETING: 'Say a friendly hello.'\n"
-                        f"- FACT_STORE: 'Acknowledge the fact in 1 simple sentence only.'\n"
-                        f"- MEMORY_RECALL: 'Answer directly using PAST FACTS only. DO NOT explain.'\n"
-                        f"- CONTINUATION: 'Read HISTORY carefully and explain the last topic in more detail.'\n"
-                        f"- NEW_TOPIC: 'Answer factually. If user asks for code, use markdown. If Joke/Fact, use normal text.'\n"
-                    ),
-                    agent=mgr_agent,
-                    context=[t1], 
-                    expected_output="A strict 1-line command for the worker."
-                )
-                
-                t3 = Task(
-                    description=(
-                        f"### USER'S PAST FACTS ###\n{vector_context}\n\n"
-                        f"### RECENT HISTORY ###\n{history}\n\n"
-                        f"### NEW QUESTION ###\n{request.question}\n\n"
-                        f"INSTRUCTIONS:\n"
-                        f"Execute Manager's command. IF NEW_TOPIC: Answer ONLY the NEW QUESTION and DO NOT repeat previous history. IF CONTINUATION: Rely deeply on RECENT HISTORY to provide a follow-up detailed answer. DO NOT output meta-text. ONLY use ``` language ``` blocks if writing a programming script. DO NOT use code blocks for jokes or text. CRITICAL: DO NOT say things like 'this is in our fact store' or 'based on memory'." 
-                    ),
-                    agent=wrk_agent,
-                    context=[t2], 
-                    expected_output="The raw drafted text containing facts and optional code blocks."
-                )
-                
-                t4 = Task(
-                    description=(
-                        f"### NEW QUESTION ###\n{request.question}\n\n"
-                        f"CRITICAL RULES FOR OUTPUT:\n"
-                        f"1. Choose ONLY ONE matching situation from the examples below. DO NOT combine answers from past history.\n" 
-                        f"2. NEVER output words like 'Word Count', 'Manager Rules Check', 'Revised Response', or 'Note:'.\n"
-                        f"3. NEVER use words like 'Fact Store', 'Database', or 'Memory'.\n" 
-                        f"4. You must format the Worker's draft EXACTLY mimicking the style of these examples:\n\n"
-                        f"{few_shot_examples}\n\n"
-                        f"5. DO NOT ask repetitive follow-up questions (e.g. stop saying 'kya aap aur janna chahte hain?'). Just give the answer and stop.\n"
-                        f"6. {point_rule}\n"
-                        f"OUTPUT ONLY THE FINAL SPOKEN MESSAGE THAT THE USER WILL READ."
-                    ),
-                    agent=crt_agent,
-                    context=[t3], 
-                    expected_output="Only the final, polished Hinglish message meant for the user. No internal logs. Code must be in markdown."
-                )
+                t1 = Task(description=(f"### USER'S PAST FACTS ###\n{vector_context}\n\n### RECENT HISTORY ###\n{history}\n\n### NEW QUESTION ###\n{request.question}\n\nINSTRUCTIONS:\nAnalyze ONLY the NEW QUESTION. Output exactly 1 word:\n- 'GREETING' (if hi, hello)\n- 'FACT_STORE' (if user is telling a fact about themselves to remember)\n- 'MEMORY_RECALL' (if user is asking about past facts)\n- 'CONTINUATION' (if user asks to explain more, give examples, or refers to the previous message)\n- 'NEW_TOPIC' (for general questions, coding, or jokes)\nDo not write anything else."), agent=lib_agent, expected_output="A single word summary: GREETING, FACT_STORE, MEMORY_RECALL, CONTINUATION, or NEW_TOPIC.")
+                t2 = Task(description=(f"### NEW QUESTION ###\n{request.question}\n\nINSTRUCTIONS:\nBased on Librarian's summary, write the command for the Worker:\n- GREETING: 'Say a friendly hello.'\n- FACT_STORE: 'Acknowledge the fact in 1 simple sentence only.'\n- MEMORY_RECALL: 'Answer directly using PAST FACTS only. DO NOT explain.'\n- CONTINUATION: 'Read HISTORY carefully and explain the last topic in more detail.'\n- NEW_TOPIC: 'Answer factually. If user asks for code, use markdown. If Joke/Fact, use normal text.'\n"), agent=mgr_agent, context=[t1], expected_output="A strict 1-line command for the worker.")
+                t3 = Task(description=(f"### USER'S PAST FACTS ###\n{vector_context}\n\n### RECENT HISTORY ###\n{history}\n\n### NEW QUESTION ###\n{request.question}\n\nINSTRUCTIONS:\nExecute Manager's command. IF NEW_TOPIC: Answer ONLY the NEW QUESTION and DO NOT repeat previous history. IF CONTINUATION: Rely deeply on RECENT HISTORY to provide a follow-up detailed answer. DO NOT output meta-text. ONLY use ``` language ``` blocks if writing a programming script. DO NOT use code blocks for jokes or text. CRITICAL: DO NOT say things like 'this is in our fact store' or 'based on memory'."), agent=wrk_agent, context=[t2], expected_output="The raw drafted text containing facts and optional code blocks.")
+                t4 = Task(description=(f"### NEW QUESTION ###\n{request.question}\n\nCRITICAL RULES FOR OUTPUT:\n1. Choose ONLY ONE matching situation from the examples below. DO NOT combine answers from past history.\n2. NEVER output words like 'Word Count', 'Manager Rules Check', 'Revised Response', or 'Note:'.\n3. NEVER use words like 'Fact Store', 'Database', or 'Memory'.\n4. You must format the Worker's draft EXACTLY mimicking the style of these examples:\n\n{few_shot_examples}\n\n5. DO NOT ask repetitive follow-up questions (e.g. stop saying 'kya aap aur janna chahte hain?'). Just give the answer and stop.\n6. {point_rule}\nOUTPUT ONLY THE FINAL SPOKEN MESSAGE THAT THE USER WILL READ."), agent=crt_agent, context=[t3], expected_output="Only the final, polished Hinglish message meant for the user. No internal logs. Code must be in markdown.")
 
                 crew = Crew(agents=[lib_agent, mgr_agent, wrk_agent, crt_agent], tasks=[t1, t2, t3, t4], verbose=False)
                 result = crew.kickoff()
                 
                 clean_answer = str(result).strip()
-
                 leak_pattern = r'(?i)(Word Count|Manager\'s Rules Check|Revised Response|Note:|Validation|Code Quality|Empathy|Fact Store|Database).*'
                 clean_answer = re.sub(leak_pattern, '', clean_answer, flags=re.DOTALL).strip()
                 
-                # 🚀 Exact Token Calculation Setup for MongoDB
+                # 🚀 Tracking Tokens in MongoDB
                 token_usage = 0
                 try:
                     if hasattr(crew, 'usage_metrics') and crew.usage_metrics:
                         token_usage = crew.usage_metrics.total_tokens
-                except Exception as e:
-                    logger.warning(f"Could not parse tokens: {str(e)}")
+                except Exception as e: pass
 
                 if isinstance(token_usage, int) and token_usage > 0 and MONGO_URL:
                     w_tok = int(token_usage * 0.70)
                     c_tok = int(token_usage * 0.20)
                     lm_tok = token_usage - w_tok - c_tok
-
-                    # Update directly into MongoDB
-                    token_stats_col.update_one(
-                        {"date_str": today_date},
-                        {"$inc": {
-                            "total_tokens": token_usage,
-                            "api_calls": 1,
-                            "worker_tokens": w_tok,
-                            "critic_tokens": c_tok,
-                            "lib_mgr_tokens": lm_tok
-                        }},
-                        upsert=True
-                    )
+                    token_stats_col.update_one({"date_str": today_date}, {"$inc": {"total_tokens": token_usage, "api_calls": 1, "worker_tokens": w_tok, "critic_tokens": c_tok, "lib_mgr_tokens": lm_tok}}, upsert=True)
 
                 token_display = token_usage if token_usage > 0 else "N/A"
-                final_db_answer = f"{clean_answer}\n\n[Engine: Enterprise Groq 🤖 | Total Tokens: {token_display} | Keys: {key_tracker} | Vector DB 🧠]"
+                final_db_answer = f"{clean_answer}\n\n[Engine: Enterprise Groq 🤖 | Total Tokens: {token_display} | Keys: {key_tracker} | Pinecone DB 🌲]"
                 success = True
                 break 
                 
@@ -456,53 +250,40 @@ def ask_ai(request: UserRequest):
                 continue
 
     # ------------------------------------------
-    # 💾 SAVE TO MONGODB & VECTOR DATABASE
+    # 💾 SAVE TO MONGODB & PINECONE
     # ------------------------------------------
     if MONGO_URL and clean_answer and "Error" not in clean_answer:
         try:
-            messages_col.insert_one({
-                "session_id": request.session_id,
-                "user_query": request.question,
-                "ai_response": final_db_answer,
-                "timestamp": current_time
-            })
-        except Exception as e:
-            logger.error(f"MongoDB Save Error: {str(e)}")
+            messages_col.insert_one({"session_id": request.session_id, "user_query": request.question, "ai_response": final_db_answer, "timestamp": current_time})
+        except Exception as e: pass
 
-    if clean_answer and "Error" not in clean_answer:
+    if clean_answer and "Error" not in clean_answer and index:
         try:
             doc_id = str(uuid.uuid4())
-            memory_collection.add(
-                documents=[f"User previously stated/asked: {request.question}\nAI answered: {clean_answer}"],
-                metadatas=[{"session_id": request.session_id, "timestamp": current_time}],
-                ids=[doc_id]
-            )
-            logger.info("Successfully Saved to Vector DB!")
+            text_to_save = f"User previously stated/asked: {request.question}\nAI answered: {clean_answer}"
+            vec = get_embedding(text_to_save)
+            index.upsert(vectors=[{"id": doc_id, "values": vec, "metadata": {"text": text_to_save, "timestamp": current_time}}], namespace=request.session_id)
+            logger.info("Successfully Saved to Pinecone Cloud Vector DB! 🌲")
         except Exception as e:
-            logger.error(f"Vector DB Save Error: {str(e)}")
+            logger.error(f"Pinecone Save Error: {str(e)}")
 
     return {"answer": final_db_answer}
 
 # ==========================================
 # 🚀 5. KEEP-ALIVE SYSTEM (Anti-Sleep)
 # ==========================================
-# 🚀 FIX: Added "HEAD" method so Render's internal bot doesn't get 405 error
 @app.api_route("/", methods=["GET", "HEAD"])
 def home():
-    """Render ke health checks ko 404 error se bachane ke liye."""
-    return {"status": "AI Agent Server is Running."}
+    return {"status": "AI Agent Server is Running on Cloud Memory."}
 
 @app.get("/ping")
 def ping():
-    """Yeh chota sa function server ko batayega ki wo zinda hai, bina AI ko jagaye."""
     return {"status": "Main jag raha hoon bhai!"}
 
 async def keep_alive_loop():
-    """Yeh background worker har 14 minute mein server ko ping karega."""
     while True:
-        await asyncio.sleep(14 * 60) # 14 minutes ka wait
+        await asyncio.sleep(14 * 60) 
         try:
-            # Aapne kaha tha isey mat chhedna, isliye waisa hi rakha hai.
             url = "[https://ai-agent-backend-bek6.onrender.com/ping](https://ai-agent-backend-bek6.onrender.com/ping)" 
             async with httpx.AsyncClient() as client:
                 await client.get(url)
@@ -512,5 +293,4 @@ async def keep_alive_loop():
 
 @app.on_event("startup")
 async def startup_event():
-    """Jaise hi server start hoga, yeh ping loop chalu ho jayega."""
     asyncio.create_task(keep_alive_loop())
