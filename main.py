@@ -72,12 +72,17 @@ def search_web(query):
     except Exception: return "Search failed."
     return "No recent data found."
 
-def get_dynamic_example(question: str, user_name: str) -> str:
+# 🚀 MULTI-SHOT PROMPTING (Top 5 Examples)
+def get_dynamic_examples(question: str, user_name: str) -> str:
     try:
         if index:
-            res = index.query(vector=get_embedding(question), top_k=1, include_metadata=True, namespace="few-shot-examples")
+            res = index.query(vector=get_embedding(question), top_k=5, include_metadata=True, namespace="few-shot-examples")
             if res and res.get('matches'):
-                return res['matches'][0]['metadata']['template'].format(q=question, user_name=user_name)
+                examples = []
+                for i, match in enumerate(res['matches']):
+                    ex_text = match['metadata']['template'].format(q=question, user_name=user_name)
+                    examples.append(f"--- Example {i+1} ---\n{ex_text}")
+                return "\n".join(examples)
     except Exception: pass
     return f"Output: 'Ji {user_name} bhai! Iska jawab yeh raha...'"
 
@@ -85,18 +90,14 @@ def get_dynamic_example(question: str, user_name: str) -> str:
 # 🧠 3. DIRECT GROQ API ENGINE
 # ==========================================
 def get_groq_keys(role):
-    # 🚀 FIX: Librarian gets keys 1-4. Fast Core and Worker BOTH get keys 5-50!
-    if role == "librarian":
-        start, end = 1, 5
-    else:
-        start, end = 5, 51
+    if role == "librarian": start, end = 1, 5
+    else: start, end = 5, 51
     return [k for k in [os.getenv(f"GROQ_API_KEY_{i}", "").strip() for i in range(start, end)] if k]
 
 def direct_groq_call(prompt, role, keys):
-    # 🚀 V18 DUAL-CORE MODEL SELECTION
-    if role == "fast_core": model_name = "gemma2-9b-it" # Google's Gemma for "Gemini Mode"
-    elif role == "worker": model_name = "llama-3.3-70b-versatile" # The Deep Thinker
-    else: model_name = "llama-3.1-8b-instant" # Librarian
+    if role == "fast_core": model_name = "llama-3.1-8b-instant" 
+    elif role == "worker": model_name = "llama-3.3-70b-versatile" 
+    else: model_name = "llama-3.1-8b-instant" 
     
     for key in keys:
         try:
@@ -120,7 +121,7 @@ class UserRequest(BaseModel):
     is_point_wise: bool = False 
 
 # ==========================================
-# 🏭 4. MAIN API ENDPOINT (V18 Dual-Core)
+# 🏭 4. MAIN API ENDPOINT (V19 Structured Pipeline)
 # ==========================================
 @app.post("/ask")
 def ask_ai(request: UserRequest):
@@ -128,11 +129,10 @@ def ask_ai(request: UserRequest):
     today_date = datetime.now().strftime("%Y-%m-%d")
     user_cmd = request.question.strip().lower()
     
-    # --- 🛡️ ADMIN INTERCEPTOR ---
     if user_cmd == "#total_tokens":
         stat = token_stats_col.find_one({"date_str": today_date}) if MONGO_URL else None
         if stat:
-            msg = (f"📊 **SYSTEM ADMIN REPORT (V18 DUAL-CORE)** 📊\n\n📅 **Date:** {today_date}\n"
+            msg = (f"📊 **SYSTEM ADMIN REPORT (V19)** 📊\n\n📅 **Date:** {today_date}\n"
                    f"🔄 **Total Tokens Today:** {stat.get('total_tokens', 0)}\n"
                    f"📞 **Total API Calls:** {stat.get('api_calls', 0)}\n"
                    f"🧠 Tokens Used: {stat.get('worker_tokens', 0)}")
@@ -140,7 +140,7 @@ def ask_ai(request: UserRequest):
         return {"answer": f"{msg}\n\n[Engine: Admin Interceptor 🛡️]"}
         
     elif user_cmd == "#system_status":
-        return {"answer": f"🟢 **SYSTEM STATUS: ONLINE (V18 Dual-Core)** 🟢\n\n🚀 Engines: Gemma Fast + Llama Deep\n🧠 Memory: Pinecone Vault\n[Engine: Admin 🛡️]"}
+        return {"answer": f"🟢 **SYSTEM STATUS: ONLINE (V19 Multi-Shot)** 🟢\n\n🚀 Engines: Llama Fast + Llama Deep\n🧠 Memory: Pinecone Vault (Top-5)\n[Engine: Admin 🛡️]"}
         
     elif user_cmd == "#flush_memory":
         if MONGO_URL: messages_col.delete_many({"session_id": request.session_id})
@@ -149,7 +149,6 @@ def ask_ai(request: UserRequest):
         except Exception: pass
         return {"answer": f"🧹 **MEMORY FLUSHED** 🧹\n\n{request.user_name} bhai, saari yaadein delete ho gayi hain!"}
 
-    # --- 🔍 CONTEXT GATHERING ---
     vector_context = "No past facts."
     try:
         if index:
@@ -162,32 +161,33 @@ def ask_ai(request: UserRequest):
         past = list(messages_col.find({"session_id": request.session_id}).sort("_id", -1).limit(3))
         history = "\n".join([f"U: {m['user_query']}\nA: {re.sub(r'\[Engine:.*?\]', '', m['ai_response']).strip()}" for m in reversed(past)])
 
-    dynamic_example = get_dynamic_example(request.question, request.user_name)
-    point_rule = "Use clean bullet points." if request.is_point_wise else "Use concise paragraphs."
+    # 🚀 V19: Fetching 5 Examples!
+    dynamic_examples = get_dynamic_examples(request.question, request.user_name)
+    
+    # 🚀 Formatting Rule
+    struct_rule = "Format your response for scannability. Use clear headings (###), bold text (**text**) for key terms, and bullet points (-) for lists."
 
     total_tokens, w_tok, c_tok = 0, 0, 0
     engine_used = ""
 
     # ==========================================
-    # ⚡ CORE 1: FAST MODE (Gemini/Gemma Native)
+    # ⚡ CORE 1: FAST MODE 
     # ==========================================
     if request.engine_choice == "gemini_native":
         fast_keys = get_groq_keys("fast_core")
         
-        # 🚀 FIX: Fast Core uses Pinecone, Emojis, and strictly <200 words.
         fast_prompt = (f"Memory: {vector_context}\nHistory: {history}\nQuestion: {request.question}\n\n"
-                       f"INSTRUCTIONS:\n"
-                       f"1. Answer the question accurately using memory if applicable.\n"
-                       f"2. Keep it SHORT. Your response MUST be strictly UNDER 200 words.\n"
-                       f"3. Match this vibe and greeting style, but DO NOT copy its exact facts: {dynamic_example}\n"
-                       f"4. Add lots of relevant emojis (🚀, 😊) to make it engaging.\n"
-                       f"5. {point_rule}\n"
-                       f"Output ONLY the final conversational response.")
+                       f"CRITICAL RULES:\n"
+                       f"1. Keep it relatively SHORT but highly structured.\n"
+                       f"2. {struct_rule}\n"
+                       f"3. Tone: Friendly. Use emojis.\n"
+                       f"4. Learn the vibe from these 5 examples, but DO NOT copy their exact facts:\n{dynamic_examples}\n"
+                       f"Output ONLY the final reply.")
         
         raw_answer, c_tok = direct_groq_call(fast_prompt, "fast_core", fast_keys)
         total_tokens = c_tok
         clean_answer = re.sub(r'(?i)(Word Count|Note:|Validation|Task:).*', '', str(raw_answer), flags=re.DOTALL).strip()
-        engine_used = "V18 Fast Core ⚡ (Google Gemma)"
+        engine_used = "V19 Fast Core ⚡"
 
     # ==========================================
     # 🧠 CORE 2: DEEP RESEARCH MODE (70B Mastermind)
@@ -195,7 +195,6 @@ def ask_ai(request: UserRequest):
     else:
         lib_keys, wrk_keys = get_groq_keys("librarian"), get_groq_keys("worker")
         
-        # Internet Check
         lib_prompt = f"Question: {request.question}\nDoes this require current internet search? Reply only YES or NO."
         need_search, l_tok = direct_groq_call(lib_prompt, "librarian", lib_keys)
         c_tok += l_tok
@@ -204,27 +203,24 @@ def ask_ai(request: UserRequest):
         if "YES" in str(need_search).upper():
             web_data = f"Web Search Info:\n{search_web(request.question)}"
 
-        # The 70B Mastermind (Facts + Style in ONE Pass)
-        master_prompt = (f"You are a highly intelligent, conversational AI assistant.\n\n"
-                         f"[AVAILABLE DATA]\nMemory: {vector_context}\nHistory: {history}\nWeb Search: {web_data}\n\n"
+        master_prompt = (f"You are {request.user_name}'s expert yet casual AI assistant.\n\n"
+                         f"[FACTS TO USE]\nMemory: {vector_context}\nWeb Search: {web_data}\n\n"
                          f"[USER'S QUESTION]\n{request.question}\n\n"
-                         f"[INSTRUCTIONS]\n"
-                         f"1. Answer factually. Use 'Available Data'. If empty, use your expansive internal knowledge.\n"
-                         f"2. Adopt the conversational tone and greeting style of this template:\n   TARGET STYLE -> {dynamic_example}\n"
-                         f"3. CRITICAL: DO NOT copy the facts from the TARGET STYLE. Only copy its personality.\n"
-                         f"4. Generously sprinkle relevant emojis (💻, 📈) throughout the response.\n"
-                         f"5. {point_rule}\n"
-                         f"Output ONLY your final, natural-sounding response.")
+                         f"[STRICT RULES]\n"
+                         f"1. ANSWER DIRECTLY: Use 'Available Data'. If empty, use your expansive internal knowledge. Be accurate.\n"
+                         f"2. FORMATTING: {struct_rule}\n"
+                         f"3. TONE: Friendly 'bhai' vibe (Hinglish/Hindi/English). Use relevant emojis (💻, 🚀, 😊).\n"
+                         f"4. ANTI-LEAKAGE: You are given these 5 examples for VIBE ONLY -> \n{dynamic_examples}\n You MUST NEVER copy their exact facts.\n"
+                         f"Output ONLY your final, beautifully formatted response.")
                          
         raw_answer, w_tok = direct_groq_call(master_prompt, "worker", wrk_keys)
         total_tokens = w_tok + c_tok
         
-        # Clean up quotes and AI pre-text to prevent weird responses
         clean_answer = re.sub(r'(?i)(Word Count|Note:|Validation|Task:|Here is the response).*', '', str(raw_answer), flags=re.DOTALL).strip()
         if clean_answer.startswith("'") and clean_answer.endswith("'"): clean_answer = clean_answer[1:-1].strip()
         if clean_answer.startswith('"') and clean_answer.endswith('"'): clean_answer = clean_answer[1:-1].strip()
         
-        engine_used = "V18 Deep Core 🧠 (70B Mastermind)"
+        engine_used = "V19 Deep Core 🧠"
 
     # --- 💾 DB UPDATE ---
     if MONGO_URL and total_tokens > 0:
@@ -241,7 +237,7 @@ def ask_ai(request: UserRequest):
 # 🚀 5. KEEP-ALIVE
 # ==========================================
 @app.api_route("/", methods=["GET", "HEAD"])
-def home(): return {"status": "V18 Dual-Core Pipeline Active"}
+def home(): return {"status": "V19 Multi-Shot Pipeline Active"}
 
 @app.get("/ping")
 def ping(): return {"status": "Main jag raha hoon bhai!"}
