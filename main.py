@@ -72,17 +72,16 @@ def search_web(query):
     except Exception: return "Search failed."
     return "No recent data found."
 
-# 🚀 MULTI-SHOT PROMPTING (Top 5 Examples)
 def get_dynamic_examples(question: str, user_name: str) -> str:
     try:
         if index:
-            res = index.query(vector=get_embedding(question), top_k=5, include_metadata=True, namespace="few-shot-examples")
+            res = index.query(vector=get_embedding(question), top_k=2, include_metadata=True, namespace="few-shot-examples")
             if res and res.get('matches'):
                 examples = []
                 for i, match in enumerate(res['matches']):
                     ex_text = match['metadata']['template'].format(q=question, user_name=user_name)
-                    examples.append(f"--- Example {i+1} ---\n{ex_text}")
-                return "\n".join(examples)
+                    examples.append(f"[STYLE EXAMPLE {i+1}]\n{ex_text}")
+                return "\n\n".join(examples)
     except Exception: pass
     return f"Output: 'Ji {user_name} bhai! Iska jawab yeh raha...'"
 
@@ -121,7 +120,7 @@ class UserRequest(BaseModel):
     is_point_wise: bool = False 
 
 # ==========================================
-# 🏭 4. MAIN API ENDPOINT (V19 Structured Pipeline)
+# 🏭 4. MAIN API ENDPOINT (V19.2 Token Tracker)
 # ==========================================
 @app.post("/ask")
 def ask_ai(request: UserRequest):
@@ -129,18 +128,20 @@ def ask_ai(request: UserRequest):
     today_date = datetime.now().strftime("%Y-%m-%d")
     user_cmd = request.question.strip().lower()
     
+    # 🚀 FIX: Enhanced Admin Dashboard for Separate Token Tracking
     if user_cmd == "#total_tokens":
         stat = token_stats_col.find_one({"date_str": today_date}) if MONGO_URL else None
         if stat:
-            msg = (f"📊 **SYSTEM ADMIN REPORT (V19)** 📊\n\n📅 **Date:** {today_date}\n"
+            msg = (f"📊 **SYSTEM ADMIN REPORT (V19.2)** 📊\n\n📅 **Date:** {today_date}\n"
                    f"🔄 **Total Tokens Today:** {stat.get('total_tokens', 0)}\n"
                    f"📞 **Total API Calls:** {stat.get('api_calls', 0)}\n"
-                   f"🧠 Tokens Used: {stat.get('worker_tokens', 0)}")
+                   f"🧠 **Deep Core (70B):** {stat.get('deep_core_tokens', 0)} tokens\n"
+                   f"⚡ **Fast Core (8B):** {stat.get('fast_core_tokens', 0)} tokens")
         else: msg = "Aaj abhi tak koi token use nahi hua hai."
         return {"answer": f"{msg}\n\n[Engine: Admin Interceptor 🛡️]"}
         
     elif user_cmd == "#system_status":
-        return {"answer": f"🟢 **SYSTEM STATUS: ONLINE (V19 Multi-Shot)** 🟢\n\n🚀 Engines: Llama Fast + Llama Deep\n🧠 Memory: Pinecone Vault (Top-5)\n[Engine: Admin 🛡️]"}
+        return {"answer": f"🟢 **SYSTEM STATUS: ONLINE (V19.2 Optimized)** 🟢\n\n🚀 Engines: Fast Mode (Max 120 words) + Deep Core (70B)\n🧠 Memory: Pinecone Vault Isolated\n[Engine: Admin 🛡️]"}
         
     elif user_cmd == "#flush_memory":
         if MONGO_URL: messages_col.delete_many({"session_id": request.session_id})
@@ -161,33 +162,37 @@ def ask_ai(request: UserRequest):
         past = list(messages_col.find({"session_id": request.session_id}).sort("_id", -1).limit(3))
         history = "\n".join([f"U: {m['user_query']}\nA: {re.sub(r'\[Engine:.*?\]', '', m['ai_response']).strip()}" for m in reversed(past)])
 
-    # 🚀 V19: Fetching 5 Examples!
     dynamic_examples = get_dynamic_examples(request.question, request.user_name)
-    
-    # 🚀 Formatting Rule
-    struct_rule = "Format your response for scannability. Use clear headings (###), bold text (**text**) for key terms, and bullet points (-) for lists."
+    struct_rule = "Format using headings (###) and bullet points (-)."
 
     total_tokens, w_tok, c_tok = 0, 0, 0
     engine_used = ""
+    footer_msg = ""
 
     # ==========================================
-    # ⚡ CORE 1: FAST MODE 
+    # ⚡ CORE 1: FAST MODE (Strict 120 Words)
     # ==========================================
     if request.engine_choice == "gemini_native":
         fast_keys = get_groq_keys("fast_core")
         
-        fast_prompt = (f"Memory: {vector_context}\nHistory: {history}\nQuestion: {request.question}\n\n"
-                       f"CRITICAL RULES:\n"
-                       f"1. Keep it relatively SHORT but highly structured.\n"
-                       f"2. {struct_rule}\n"
-                       f"3. Tone: Friendly. Use emojis.\n"
-                       f"4. Learn the vibe from these 5 examples, but DO NOT copy their exact facts:\n{dynamic_examples}\n"
-                       f"Output ONLY the final reply.")
+        # 🚀 FIX: 120 Words limit enforced!
+        fast_prompt = (
+            f"System: You are a fast, helpful AI.\n\n"
+            f"=== YOUR MEMORY (USE THIS FOR FACTS) ===\n{vector_context}\n\n"
+            f"=== TONE EXAMPLES (DO NOT COPY THESE WORDS, JUST LEARN THE VIBE) ===\n{dynamic_examples}\n\n"
+            f"=== TASK ===\n"
+            f"History: {history}\n"
+            f"User: {request.question}\n\n"
+            f"Rules:\n1. Answer based on YOUR MEMORY. \n2. CRITICAL: Your response MUST BE UNDER 120 WORDS.\n3. Do NOT copy sentences from the Tone Examples.\n4. Be friendly and use emojis.\n"
+            f"AI Response:"
+        )
         
         raw_answer, c_tok = direct_groq_call(fast_prompt, "fast_core", fast_keys)
         total_tokens = c_tok
-        clean_answer = re.sub(r'(?i)(Word Count|Note:|Validation|Task:).*', '', str(raw_answer), flags=re.DOTALL).strip()
-        engine_used = "V19 Fast Core ⚡"
+        clean_answer = re.sub(r'(?i)(Word Count|Note:|Validation|Task:|AI Response:).*', '', str(raw_answer), flags=re.DOTALL).strip()
+        
+        # 🚀 FIX: Custom footer for Fast Mode suggesting Deep Mode
+        footer_msg = f"[V19.2 Fast Core ⚡ | Tokens: {total_tokens} | Switch to 'Groq 4-Tier' for Deep Info]"
 
     # ==========================================
     # 🧠 CORE 2: DEEP RESEARCH MODE (70B Mastermind)
@@ -203,41 +208,53 @@ def ask_ai(request: UserRequest):
         if "YES" in str(need_search).upper():
             web_data = f"Web Search Info:\n{search_web(request.question)}"
 
-        master_prompt = (f"You are {request.user_name}'s expert yet casual AI assistant.\n\n"
-                         f"[FACTS TO USE]\nMemory: {vector_context}\nWeb Search: {web_data}\n\n"
-                         f"[USER'S QUESTION]\n{request.question}\n\n"
-                         f"[STRICT RULES]\n"
-                         f"1. ANSWER DIRECTLY: Use 'Available Data'. If empty, use your expansive internal knowledge. Be accurate.\n"
-                         f"2. FORMATTING: {struct_rule}\n"
-                         f"3. TONE: Friendly 'bhai' vibe (Hinglish/Hindi/English). Use relevant emojis (💻, 🚀, 😊).\n"
-                         f"4. ANTI-LEAKAGE: You are given these 5 examples for VIBE ONLY -> \n{dynamic_examples}\n You MUST NEVER copy their exact facts.\n"
-                         f"Output ONLY your final, beautifully formatted response.")
+        master_prompt = (
+            f"System: You are {request.user_name}'s expert AI.\n\n"
+            f"=== RELEVANT FACTS ===\nMemory: {vector_context}\nWeb Search: {web_data}\n\n"
+            f"=== TONE EXAMPLES (DO NOT REPEAT THESE TEXTS, LEARN THE FORMAT ONLY) ===\n{dynamic_examples}\n\n"
+            f"=== TASK ===\n"
+            f"History: {history}\n"
+            f"User: {request.question}\n\n"
+            f"Rules:\n"
+            f"1. Answer based ONLY on Facts/Memory. If empty, use internal knowledge.\n"
+            f"2. NEVER repeat the sentences from the Tone Examples.\n"
+            f"3. {struct_rule}\n"
+            f"4. Be friendly (Hinglish) with emojis.\n"
+            f"AI Response:"
+        )
                          
         raw_answer, w_tok = direct_groq_call(master_prompt, "worker", wrk_keys)
         total_tokens = w_tok + c_tok
         
-        clean_answer = re.sub(r'(?i)(Word Count|Note:|Validation|Task:|Here is the response).*', '', str(raw_answer), flags=re.DOTALL).strip()
+        clean_answer = re.sub(r'(?i)(Word Count|Note:|Validation|Task:|AI Response:|Here is the response).*', '', str(raw_answer), flags=re.DOTALL).strip()
         if clean_answer.startswith("'") and clean_answer.endswith("'"): clean_answer = clean_answer[1:-1].strip()
         if clean_answer.startswith('"') and clean_answer.endswith('"'): clean_answer = clean_answer[1:-1].strip()
         
-        engine_used = "V19 Deep Core 🧠"
+        footer_msg = f"[V19.2 Deep Core 🧠 | Tokens: {total_tokens}]"
 
-    # --- 💾 DB UPDATE ---
+    # --- 💾 DB UPDATE (SEPARATE TOKEN TRACKING) ---
     if MONGO_URL and total_tokens > 0:
-        token_stats_col.update_one({"date_str": today_date}, {"$inc": {"total_tokens": total_tokens, "api_calls": 1, "worker_tokens": total_tokens}}, upsert=True)
-        messages_col.insert_one({"session_id": request.session_id, "user_query": request.question, "ai_response": f"{clean_answer}\n\n[Engine: {engine_used}]", "timestamp": current_time})
+        # 🚀 FIX: Separating tokens into the database
+        db_updates = {"total_tokens": total_tokens, "api_calls": 1}
+        if request.engine_choice == "gemini_native":
+            db_updates["fast_core_tokens"] = total_tokens
+        else:
+            db_updates["deep_core_tokens"] = total_tokens
+            
+        token_stats_col.update_one({"date_str": today_date}, {"$inc": db_updates}, upsert=True)
+        messages_col.insert_one({"session_id": request.session_id, "user_query": request.question, "ai_response": f"{clean_answer}\n\n{footer_msg}", "timestamp": current_time})
 
-    if index and clean_answer and "Error" not in clean_answer:
+    if index and clean_answer and "Error" not in clean_answer and "Output:" not in clean_answer:
         try: index.upsert(vectors=[{"id": str(uuid.uuid4()), "values": get_embedding(f"Q: {request.question} A: {clean_answer}"), "metadata": {"text": f"User: {request.question}\nAI: {clean_answer}"}}], namespace=request.session_id)
         except Exception: pass
 
-    return {"answer": f"{clean_answer}\n\n[{engine_used} | Tokens: {total_tokens}]"}
+    return {"answer": f"{clean_answer}\n\n{footer_msg}"}
 
 # ==========================================
 # 🚀 5. KEEP-ALIVE
 # ==========================================
 @app.api_route("/", methods=["GET", "HEAD"])
-def home(): return {"status": "V19 Multi-Shot Pipeline Active"}
+def home(): return {"status": "V19.2 Token Tracked Pipeline Active"}
 
 @app.get("/ping")
 def ping(): return {"status": "Main jag raha hoon bhai!"}
