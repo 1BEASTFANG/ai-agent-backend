@@ -128,7 +128,7 @@ def ask_ai(request: UserRequest):
     if user_cmd == "#total_tokens":
         stat = token_stats_col.find_one({"date_str": today_date}) if MONGO_URL else None
         if stat:
-            msg = (f"📊 **SYSTEM ADMIN REPORT (V17 Custom)** 📊\n\n📅 **Date:** {today_date}\n"
+            msg = (f"📊 **SYSTEM ADMIN REPORT (V17.1 Custom)** 📊\n\n📅 **Date:** {today_date}\n"
                    f"🔄 **Total Tokens Today:** {stat.get('total_tokens', 0)}\n"
                    f"📞 **Total API Calls:** {stat.get('api_calls', 0)}\n"
                    f"🧠 Worker (70B): {stat.get('worker_tokens', 0)} tokens\n"
@@ -137,7 +137,7 @@ def ask_ai(request: UserRequest):
         return {"answer": f"{msg}\n\n[Engine: Admin Interceptor 🛡️]"}
         
     elif user_cmd == "#system_status":
-        return {"answer": f"🟢 **SYSTEM STATUS: ONLINE (V17 Custom Pipeline)** 🟢\n\n🚀 Direct Groq Engine: Active (CrewAI Removed)\n🧠 Memory: Pinecone Mega-Vault\n💾 DB: MongoDB\n[Engine: Admin 🛡️]"}
+        return {"answer": f"🟢 **SYSTEM STATUS: ONLINE (V17.1 Fixed Critic Pipeline)** 🟢\n\n🚀 Direct Groq Engine: Active (CrewAI Removed)\n🧠 Memory: Pinecone Mega-Vault\n💾 DB: MongoDB\n[Engine: Admin 🛡️]"}
         
     elif user_cmd == "#flush_memory":
         if MONGO_URL: messages_col.delete_many({"session_id": request.session_id})
@@ -178,37 +178,44 @@ def ask_ai(request: UserRequest):
         web_data = f"Web Search Info:\n{search_web(request.question)}"
 
     # STEP 2: WORKER (Generate Raw Answer - 70B)
-    wrk_prompt = (f"Facts: {vector_context}\nHistory: {history}\n{web_data}\n\n"
-                  f"Question: {request.question}\nAnswer factually. Do not format yet.")
+    wrk_prompt = (f"Facts from Database: {vector_context}\nChat History: {history}\n{web_data}\n\n"
+                  f"User's Question: {request.question}\n"
+                  f"Task: Write a highly factual answer based ONLY on the Facts and Question. Do not add greetings.")
     raw_answer, w_tok = direct_groq_call(wrk_prompt, "worker", wrk_keys)
     
-    # STEP 3: CRITIC (Format to match Mega-Vault - 8B)
-    crt_prompt = (f"Rewrite this raw answer: '{raw_answer}'\n\n"
-                  f"CRITICAL RULES:\n1. It MUST exactly match this style and tone:\n{dynamic_example}\n"
-                  f"2. {point_rule}\nOutput ONLY the final spoken message.")
+    # 🚀 STEP 3: CRITIC (FIXED PROMPT - Strict separation of Style and Facts + Emojis)
+    crt_prompt = (f"Task: Rewrite the RAW_ANSWER to match the conversational STYLE of the EXAMPLE_TONE.\n\n"
+                  f"RAW_ANSWER (Keep these facts 100% intact, do not alter the truth): \n'{raw_answer}'\n\n"
+                  f"EXAMPLE_TONE (Use this personality and formatting, but DO NOT copy its text/facts): \n{dynamic_example}\n\n"
+                  f"CRITICAL RULES:\n"
+                  f"1. DO NOT change the facts from the RAW_ANSWER. If the raw answer states a specific detail (like 'Lenovo'), you MUST include that detail accurately.\n"
+                  f"2. Add a greeting similar to the EXAMPLE_TONE.\n"
+                  f"3. Generously sprinkle contextually relevant EMOJIS throughout your response to make it engaging.\n"
+                  f"4. {point_rule}\n"
+                  f"Output ONLY the final translated conversational message.")
     final_answer, c_tok_step = direct_groq_call(crt_prompt, "critic", crt_keys)
     c_tok += c_tok_step
     
     total_tokens = w_tok + c_tok
-    clean_answer = re.sub(r'(?i)(Word Count|Note:|Validation).*', '', str(final_answer), flags=re.DOTALL).strip()
+    clean_answer = re.sub(r'(?i)(Word Count|Note:|Validation|Task:).*', '', str(final_answer), flags=re.DOTALL).strip()
 
     # --- 💾 UPDATE DB & PINECONE ---
     if MONGO_URL and total_tokens > 0:
         token_stats_col.update_one({"date_str": today_date}, {"$inc": {"total_tokens": total_tokens, "api_calls": 1, "worker_tokens": w_tok, "critic_tokens": c_tok}}, upsert=True)
-        messages_col.insert_one({"session_id": request.session_id, "user_query": request.question, "ai_response": f"{clean_answer}\n\n[Engine: V17 Direct API ⚡]", "timestamp": current_time})
+        messages_col.insert_one({"session_id": request.session_id, "user_query": request.question, "ai_response": f"{clean_answer}\n\n[Engine: V17.1 Direct API ⚡]", "timestamp": current_time})
 
     if index and clean_answer and "Error" not in clean_answer:
         try: index.upsert(vectors=[{"id": str(uuid.uuid4()), "values": get_embedding(f"Q: {request.question} A: {clean_answer}"), "metadata": {"text": f"User: {request.question}\nAI: {clean_answer}"}}], namespace=request.session_id)
         except Exception: pass
 
-    final_db_answer = f"{clean_answer}\n\n[Engine: V17 Direct API ⚡ | Tokens: {total_tokens}]"
+    final_db_answer = f"{clean_answer}\n\n[Engine: V17.1 Direct API ⚡ | Tokens: {total_tokens}]"
     return {"answer": final_db_answer}
 
 # ==========================================
 # 🚀 5. KEEP-ALIVE SYSTEM (Anti-Sleep)
 # ==========================================
 @app.api_route("/", methods=["GET", "HEAD"])
-def home(): return {"status": "V17 Custom Pipeline Active"}
+def home(): return {"status": "V17.1 Custom Pipeline Active"}
 
 @app.get("/ping")
 def ping(): return {"status": "Main jag raha hoon bhai!"}
