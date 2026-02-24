@@ -22,7 +22,6 @@ from pymongo import MongoClient
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
-# --- MONGODB DATABASE SETUP ---
 MONGO_URL = os.getenv("MONGO_URL")
 try:
     if MONGO_URL:
@@ -33,7 +32,6 @@ try:
         logger.info("Successfully connected to MongoDB Atlas! 🎉")
 except Exception as e: logger.error(f"MongoDB Connection Failed: {e}")
 
-# --- PINECONE DATABASE SETUP ---
 PINECONE_API_KEY = os.getenv("PINECONE_API_KEY")
 PINECONE_HOST = os.getenv("PINECONE_HOST")
 index = None
@@ -47,7 +45,7 @@ except Exception as e: logger.error(f"Pinecone Setup Error: {e}")
 app = FastAPI()
 
 # ==========================================
-# ⚡ 2. CORE TOOLS (Embeddings & Web Search)
+# ⚡ 2. CORE TOOLS
 # ==========================================
 HF_API_KEY = os.getenv("HF_API_KEY", "").strip()
 
@@ -63,10 +61,9 @@ def get_embedding(text):
         return [0.0] * 384 
     except Exception: return [0.0] * 384
 
-# 🚀 CUSTOM WEB SEARCH (Replaces CrewAI Serper Tool)
 def search_web(query):
     serper_key = os.getenv("SERPER_API_KEY", "").strip()
-    if not serper_key: return "No internet access (API Key missing)."
+    if not serper_key: return "No internet access."
     try:
         res = httpx.post("https://google.serper.dev/search", headers={"X-API-KEY": serper_key}, json={"q": query}, timeout=10.0)
         if res.status_code == 200:
@@ -75,7 +72,6 @@ def search_web(query):
     except Exception: return "Search failed."
     return "No recent data found."
 
-# 🚀 PINECONE ROUTER
 def get_dynamic_example(question: str, user_name: str) -> str:
     try:
         if index:
@@ -86,7 +82,7 @@ def get_dynamic_example(question: str, user_name: str) -> str:
     return f"Output: 'Ji {user_name} bhai! Iska jawab yeh raha...'"
 
 # ==========================================
-# 🧠 3. DIRECT GROQ API ENGINE (Zero CrewAI Overhead)
+# 🧠 3. DIRECT GROQ API ENGINE
 # ==========================================
 def get_groq_keys(role):
     start, end = (1, 6) if role == "librarian" else ((6, 11) if role in ["manager", "critic"] else (11, 51))
@@ -131,13 +127,12 @@ def ask_ai(request: UserRequest):
             msg = (f"📊 **SYSTEM ADMIN REPORT (V17.1 Custom)** 📊\n\n📅 **Date:** {today_date}\n"
                    f"🔄 **Total Tokens Today:** {stat.get('total_tokens', 0)}\n"
                    f"📞 **Total API Calls:** {stat.get('api_calls', 0)}\n"
-                   f"🧠 Worker (70B): {stat.get('worker_tokens', 0)} tokens\n"
-                   f"🕵️‍♂️ Critic/Lib (8B): {stat.get('critic_tokens', 0)} tokens")
+                   f"🧠 Worker (70B): {stat.get('worker_tokens', 0)} | 🕵️‍♂️ Critic/Lib (8B): {stat.get('critic_tokens', 0)}")
         else: msg = "Aaj abhi tak koi token use nahi hua hai."
         return {"answer": f"{msg}\n\n[Engine: Admin Interceptor 🛡️]"}
         
     elif user_cmd == "#system_status":
-        return {"answer": f"🟢 **SYSTEM STATUS: ONLINE (V17.1 Fixed Critic Pipeline)** 🟢\n\n🚀 Direct Groq Engine: Active (CrewAI Removed)\n🧠 Memory: Pinecone Mega-Vault\n💾 DB: MongoDB\n[Engine: Admin 🛡️]"}
+        return {"answer": f"🟢 **SYSTEM STATUS: ONLINE (V17.1 Fixed)** 🟢\n\n🚀 Direct Engine: Active\n🧠 Memory: Pinecone Vault\n[Engine: Admin 🛡️]"}
         
     elif user_cmd == "#flush_memory":
         if MONGO_URL: messages_col.delete_many({"session_id": request.session_id})
@@ -162,13 +157,11 @@ def ask_ai(request: UserRequest):
     dynamic_example = get_dynamic_example(request.question, request.user_name)
     point_rule = "Use clean bullet points." if request.is_point_wise else "Use concise paragraphs."
 
-    # ==========================================
-    # 🏭 THE CUSTOM FAST PIPELINE (2-STEP)
-    # ==========================================
+    # --- 🏭 THE CUSTOM PIPELINE EXECUTION ---
     lib_keys, wrk_keys, crt_keys = get_groq_keys("librarian"), get_groq_keys("worker"), get_groq_keys("critic")
     total_tokens, w_tok, c_tok = 0, 0, 0
     
-    # STEP 1: LIBRARIAN (Do we need internet?)
+    # 🟢 STEP 1: LIBRARIAN (Internet Check)
     lib_prompt = f"Question: {request.question}\nDoes this require current internet search? Reply only YES or NO."
     need_search, l_tok = direct_groq_call(lib_prompt, "librarian", lib_keys)
     c_tok += l_tok
@@ -177,47 +170,46 @@ def ask_ai(request: UserRequest):
     if "YES" in str(need_search).upper():
         web_data = f"Web Search Info:\n{search_web(request.question)}"
 
-        # STEP 2: WORKER (Generate Raw Answer - 70B)
+    # 🟢 STEP 2: WORKER (Generate Raw Answer - 70B)
     wrk_prompt = (f"Facts from Database: {vector_context}\nChat History: {history}\n{web_data}\n\n"
                   f"User's Question: {request.question}\n"
-                  f"Task: You are an expert AI. Answer the user's question factually and accurately.\n"
-                  f"- If 'Facts from Database' or 'Web Search Info' have the answer, use them.\n"
-                  f"- If they are empty or don't have the answer, USE YOUR OWN INTERNAL KNOWLEDGE to answer fully.\n"
-                  f"- Do not add greetings or styling, just give the raw factual answer.")
-
-    # 🚀 STEP 3: CRITIC (FIXED PROMPT - Strict separation of Style and Facts + Emojis)
+                  f"Task: You are an expert AI. Answer factually and accurately.\n"
+                  f"- If DB or Web have the answer, use them.\n"
+                  f"- If not, USE YOUR OWN INTERNAL KNOWLEDGE.\n"
+                  f"- No greetings, just raw factual answer.")
+    raw_answer, w_tok = direct_groq_call(wrk_prompt, "worker", wrk_keys) # 🚀 FIX: Actually calling the function
+    
+    # 🟢 STEP 3: CRITIC (Formatting & Emojis - 8B)
     crt_prompt = (f"Task: Rewrite the RAW_ANSWER to match the conversational STYLE of the EXAMPLE_TONE.\n\n"
-                  f"RAW_ANSWER (Keep these facts 100% intact, do not alter the truth): \n'{raw_answer}'\n\n"
-                  f"EXAMPLE_TONE (Use this personality and formatting, but DO NOT copy its text/facts): \n{dynamic_example}\n\n"
+                  f"RAW_ANSWER: \n'{raw_answer}'\n\n"
+                  f"EXAMPLE_TONE: \n{dynamic_example}\n\n"
                   f"CRITICAL RULES:\n"
-                  f"1. DO NOT change the facts from the RAW_ANSWER. If the raw answer states a specific detail (like 'Lenovo'), you MUST include that detail accurately.\n"
-                  f"2. Add a greeting similar to the EXAMPLE_TONE.\n"
-                  f"3. Generously sprinkle contextually relevant EMOJIS throughout your response to make it engaging.\n"
-                  f"4. {point_rule}\n"
-                  f"Output ONLY the final translated conversational message.")
-    final_answer, c_tok_step = direct_groq_call(crt_prompt, "critic", crt_keys)
+                  f"1. DO NOT change facts. Keep 'Lenovo', 'MRF', etc. exactly as provided.\n"
+                  f"2. Add a greeting and sprinkle relevant EMOJIS (💻, 📈, 😊).\n"
+                  f"3. {point_rule}\n"
+                  f"Output ONLY the final conversational message.")
+    final_answer, c_tok_step = direct_groq_call(crt_prompt, "critic", crt_keys) # 🚀 FIX: Actually calling the function
     c_tok += c_tok_step
     
     total_tokens = w_tok + c_tok
     clean_answer = re.sub(r'(?i)(Word Count|Note:|Validation|Task:).*', '', str(final_answer), flags=re.DOTALL).strip()
 
-    # --- 💾 UPDATE DB & PINECONE ---
+    # --- 💾 DB UPDATE ---
     if MONGO_URL and total_tokens > 0:
         token_stats_col.update_one({"date_str": today_date}, {"$inc": {"total_tokens": total_tokens, "api_calls": 1, "worker_tokens": w_tok, "critic_tokens": c_tok}}, upsert=True)
-        messages_col.insert_one({"session_id": request.session_id, "user_query": request.question, "ai_response": f"{clean_answer}\n\n[Engine: V17.1 Direct API ⚡]", "timestamp": current_time})
+        messages_col.insert_one({"session_id": request.session_id, "user_query": request.question, "ai_response": f"{clean_answer}\n\n[Engine: V17.1 Fixed ⚡]", "timestamp": current_time})
 
     if index and clean_answer and "Error" not in clean_answer:
         try: index.upsert(vectors=[{"id": str(uuid.uuid4()), "values": get_embedding(f"Q: {request.question} A: {clean_answer}"), "metadata": {"text": f"User: {request.question}\nAI: {clean_answer}"}}], namespace=request.session_id)
         except Exception: pass
 
-    final_db_answer = f"{clean_answer}\n\n[Engine: V17.1 Direct API ⚡ | Tokens: {total_tokens}]"
-    return {"answer": final_db_answer}
+    return {"answer": f"{clean_answer}\n\n[Engine: V17.1 Fixed ⚡ | Tokens: {total_tokens}]"}
 
 # ==========================================
-# 🚀 5. KEEP-ALIVE SYSTEM (Anti-Sleep)
+# 🚀 5. KEEP-ALIVE
 # ==========================================
 @app.api_route("/", methods=["GET", "HEAD"])
-def home(): return {"status": "V17.1 Custom Pipeline Active"}
+def home(): return {"status": "V17.1 Fixed Pipeline Active"}
 
 @app.get("/ping")
 def ping(): return {"status": "Main jag raha hoon bhai!"}
@@ -228,8 +220,7 @@ async def keep_alive_loop():
         try:
             async with httpx.AsyncClient() as client:
                 await client.get("https://ai-agent-backend-bek6.onrender.com/ping")
-                logger.info("Ping Sent!")
-        except Exception as e: logger.error(f"Ping failed: {e}")
+        except Exception: pass
 
 @app.on_event("startup")
 async def startup_event(): asyncio.create_task(keep_alive_loop())
