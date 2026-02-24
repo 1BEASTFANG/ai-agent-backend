@@ -2,10 +2,10 @@ fastapi
 uvicorn
 sqlalchemy
 pydantic
-crewai
-crewai_tools
-google-genai
-chromadb
+
+
+
+
 httpx
 litellm
 apscheduler
