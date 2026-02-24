@@ -177,12 +177,14 @@ def ask_ai(request: UserRequest):
     if "YES" in str(need_search).upper():
         web_data = f"Web Search Info:\n{search_web(request.question)}"
 
-    # STEP 2: WORKER (Generate Raw Answer - 70B)
+        # STEP 2: WORKER (Generate Raw Answer - 70B)
     wrk_prompt = (f"Facts from Database: {vector_context}\nChat History: {history}\n{web_data}\n\n"
                   f"User's Question: {request.question}\n"
-                  f"Task: Write a highly factual answer based ONLY on the Facts and Question. Do not add greetings.")
-    raw_answer, w_tok = direct_groq_call(wrk_prompt, "worker", wrk_keys)
-    
+                  f"Task: You are an expert AI. Answer the user's question factually and accurately.\n"
+                  f"- If 'Facts from Database' or 'Web Search Info' have the answer, use them.\n"
+                  f"- If they are empty or don't have the answer, USE YOUR OWN INTERNAL KNOWLEDGE to answer fully.\n"
+                  f"- Do not add greetings or styling, just give the raw factual answer.")
+
     # 🚀 STEP 3: CRITIC (FIXED PROMPT - Strict separation of Style and Facts + Emojis)
     crt_prompt = (f"Task: Rewrite the RAW_ANSWER to match the conversational STYLE of the EXAMPLE_TONE.\n\n"
                   f"RAW_ANSWER (Keep these facts 100% intact, do not alter the truth): \n'{raw_answer}'\n\n"
