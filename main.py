@@ -120,7 +120,7 @@ class UserRequest(BaseModel):
     is_point_wise: bool = False 
 
 # ==========================================
-# 🏭 4. MAIN API ENDPOINT (V19.2 Token Tracker)
+# 🏭 4. MAIN API ENDPOINT (V19.3 Smart Formatting)
 # ==========================================
 @app.post("/ask")
 def ask_ai(request: UserRequest):
@@ -128,11 +128,10 @@ def ask_ai(request: UserRequest):
     today_date = datetime.now().strftime("%Y-%m-%d")
     user_cmd = request.question.strip().lower()
     
-    # 🚀 FIX: Enhanced Admin Dashboard for Separate Token Tracking
     if user_cmd == "#total_tokens":
         stat = token_stats_col.find_one({"date_str": today_date}) if MONGO_URL else None
         if stat:
-            msg = (f"📊 **SYSTEM ADMIN REPORT (V19.2)** 📊\n\n📅 **Date:** {today_date}\n"
+            msg = (f"📊 **SYSTEM ADMIN REPORT (V19.3)** 📊\n\n📅 **Date:** {today_date}\n"
                    f"🔄 **Total Tokens Today:** {stat.get('total_tokens', 0)}\n"
                    f"📞 **Total API Calls:** {stat.get('api_calls', 0)}\n"
                    f"🧠 **Deep Core (70B):** {stat.get('deep_core_tokens', 0)} tokens\n"
@@ -141,7 +140,7 @@ def ask_ai(request: UserRequest):
         return {"answer": f"{msg}\n\n[Engine: Admin Interceptor 🛡️]"}
         
     elif user_cmd == "#system_status":
-        return {"answer": f"🟢 **SYSTEM STATUS: ONLINE (V19.2 Optimized)** 🟢\n\n🚀 Engines: Fast Mode (Max 120 words) + Deep Core (70B)\n🧠 Memory: Pinecone Vault Isolated\n[Engine: Admin 🛡️]"}
+        return {"answer": f"🟢 **SYSTEM STATUS: ONLINE (V19.3 Smart Formatting)** 🟢\n\n🚀 Engines: Fast Mode (Casual) + Deep Core (Structured)\n🧠 Memory: Pinecone Vault\n[Engine: Admin 🛡️]"}
         
     elif user_cmd == "#flush_memory":
         if MONGO_URL: messages_col.delete_many({"session_id": request.session_id})
@@ -163,27 +162,28 @@ def ask_ai(request: UserRequest):
         history = "\n".join([f"U: {m['user_query']}\nA: {re.sub(r'\[Engine:.*?\]', '', m['ai_response']).strip()}" for m in reversed(past)])
 
     dynamic_examples = get_dynamic_examples(request.question, request.user_name)
-    struct_rule = "Format using headings (###) and bullet points (-)."
 
     total_tokens, w_tok, c_tok = 0, 0, 0
     engine_used = ""
     footer_msg = ""
 
     # ==========================================
-    # ⚡ CORE 1: FAST MODE (Strict 120 Words)
+    # ⚡ CORE 1: FAST MODE (Casual & Simple)
     # ==========================================
     if request.engine_choice == "gemini_native":
         fast_keys = get_groq_keys("fast_core")
         
-        # 🚀 FIX: 120 Words limit enforced!
+        # 🚀 FIX: Fast Core ko list banane se mana kar diya. Isko sirf "Normal Chat" karni hai.
         fast_prompt = (
-            f"System: You are a fast, helpful AI.\n\n"
-            f"=== YOUR MEMORY (USE THIS FOR FACTS) ===\n{vector_context}\n\n"
-            f"=== TONE EXAMPLES (DO NOT COPY THESE WORDS, JUST LEARN THE VIBE) ===\n{dynamic_examples}\n\n"
+            f"System: You are a fast, friendly AI for {request.user_name}.\n\n"
+            f"=== MEMORY ===\n{vector_context}\n\n"
             f"=== TASK ===\n"
             f"History: {history}\n"
             f"User: {request.question}\n\n"
-            f"Rules:\n1. Answer based on YOUR MEMORY. \n2. CRITICAL: Your response MUST BE UNDER 120 WORDS.\n3. Do NOT copy sentences from the Tone Examples.\n4. Be friendly and use emojis.\n"
+            f"Rules:\n"
+            f"1. Keep it CASUAL and extremely SHORT (under 50 words).\n"
+            f"2. DO NOT use lists or bullet points. Just reply like a friend in 1-2 sentences.\n"
+            f"3. Use emojis.\n"
             f"AI Response:"
         )
         
@@ -191,11 +191,10 @@ def ask_ai(request: UserRequest):
         total_tokens = c_tok
         clean_answer = re.sub(r'(?i)(Word Count|Note:|Validation|Task:|AI Response:).*', '', str(raw_answer), flags=re.DOTALL).strip()
         
-        # 🚀 FIX: Custom footer for Fast Mode suggesting Deep Mode
-        footer_msg = f"[V19.2 Fast Core ⚡ | Tokens: {total_tokens} | Switch to 'Groq 4-Tier' for Deep Info]"
+        footer_msg = f"[V19.3 Fast Core ⚡ | Tokens: {total_tokens} | Switch to 'Groq 4-Tier' for Deep Info]"
 
     # ==========================================
-    # 🧠 CORE 2: DEEP RESEARCH MODE (70B Mastermind)
+    # 🧠 CORE 2: DEEP RESEARCH MODE (Smart Structure)
     # ==========================================
     else:
         lib_keys, wrk_keys = get_groq_keys("librarian"), get_groq_keys("worker")
@@ -208,17 +207,20 @@ def ask_ai(request: UserRequest):
         if "YES" in str(need_search).upper():
             web_data = f"Web Search Info:\n{search_web(request.question)}"
 
+        # 🚀 FIX: Deep Core ko sikhaya ki chhoti baaton pe list na banaye!
+        struct_rule = "If the answer requires steps or detailed explanation, use Headings (###) and Bullet points (-). If it's a simple greeting or 1-line answer, do NOT use lists."
+
         master_prompt = (
             f"System: You are {request.user_name}'s expert AI.\n\n"
             f"=== RELEVANT FACTS ===\nMemory: {vector_context}\nWeb Search: {web_data}\n\n"
-            f"=== TONE EXAMPLES (DO NOT REPEAT THESE TEXTS, LEARN THE FORMAT ONLY) ===\n{dynamic_examples}\n\n"
+            f"=== TONE EXAMPLES ===\n{dynamic_examples}\n\n"
             f"=== TASK ===\n"
             f"History: {history}\n"
             f"User: {request.question}\n\n"
             f"Rules:\n"
             f"1. Answer based ONLY on Facts/Memory. If empty, use internal knowledge.\n"
-            f"2. NEVER repeat the sentences from the Tone Examples.\n"
-            f"3. {struct_rule}\n"
+            f"2. NEVER repeat the exact sentences from the Tone Examples.\n"
+            f"3. FORMATTING: {struct_rule}\n"
             f"4. Be friendly (Hinglish) with emojis.\n"
             f"AI Response:"
         )
@@ -230,11 +232,10 @@ def ask_ai(request: UserRequest):
         if clean_answer.startswith("'") and clean_answer.endswith("'"): clean_answer = clean_answer[1:-1].strip()
         if clean_answer.startswith('"') and clean_answer.endswith('"'): clean_answer = clean_answer[1:-1].strip()
         
-        footer_msg = f"[V19.2 Deep Core 🧠 | Tokens: {total_tokens}]"
+        footer_msg = f"[V19.3 Deep Core 🧠 | Tokens: {total_tokens}]"
 
-    # --- 💾 DB UPDATE (SEPARATE TOKEN TRACKING) ---
+    # --- 💾 DB UPDATE ---
     if MONGO_URL and total_tokens > 0:
-        # 🚀 FIX: Separating tokens into the database
         db_updates = {"total_tokens": total_tokens, "api_calls": 1}
         if request.engine_choice == "gemini_native":
             db_updates["fast_core_tokens"] = total_tokens
@@ -254,7 +255,7 @@ def ask_ai(request: UserRequest):
 # 🚀 5. KEEP-ALIVE
 # ==========================================
 @app.api_route("/", methods=["GET", "HEAD"])
-def home(): return {"status": "V19.2 Token Tracked Pipeline Active"}
+def home(): return {"status": "V19.3 Smart Formatting Pipeline Active"}
 
 @app.get("/ping")
 def ping(): return {"status": "Main jag raha hoon bhai!"}
