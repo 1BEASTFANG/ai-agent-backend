@@ -361,7 +361,16 @@ async def ask_ai_stream(request: UserRequest):
         loop = asyncio.get_running_loop()
         loop.run_in_executor(None, save_memory_background, request.session_id, request.question, full_answer + footer_msg, estimated_tokens, request.engine_choice, today_date, current_time)
 
-    return StreamingResponse(response_generator(), media_type="text/plain")
+   # 🚀 NAYA: Render ko buffering rokne ka order de rahe hain!
+    return StreamingResponse(
+        response_generator(), 
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no" # 🔥 MAGIC LINE: Ye Render ko rokega data hold karne se
+        }
+    )
 
 
 # ==========================================
