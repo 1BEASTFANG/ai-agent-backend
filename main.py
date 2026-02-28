@@ -61,16 +61,48 @@ def get_embedding(text):
         return [0.0] * 384 
     except Exception: return [0.0] * 384
 
+# ==========================================
+# 🌐 ADVANCED WEB SEARCH ENGINE (WITH KEY ROTATION)
+# ==========================================
+def get_serper_keys():
+    # 🚀 SECURE MODE: Ab keys code mein nahi, Environment se aayengi!
+    keys = [
+        os.getenv("SERPER_API_KEY_1", "").strip(),
+        os.getenv("SERPER_API_KEY_2", "").strip(),
+        os.getenv("SERPER_API_KEY_3", "").strip() # Backup ke liye
+    ]
+    # Jo keys exist karti hain aur khali nahi hain, sirf unhe return karo
+    return [k for k in keys if k]
+
 def search_web(query):
-    serper_key = os.getenv("SERPER_API_KEY", "").strip()
-    if not serper_key: return "No internet access."
-    try:
-        res = httpx.post("https://google.serper.dev/search", headers={"X-API-KEY": serper_key}, json={"q": query}, timeout=10.0)
-        if res.status_code == 200:
-            results = res.json().get("organic", [])
-            return "\n".join([f"- {r.get('title')}: {r.get('snippet')}" for r in results[:3]])
-    except Exception: return "Search failed."
-    return "No recent data found."
+    keys = get_serper_keys()
+    if not keys: 
+        return "No internet access (API keys missing)."
+    
+    # Loop through keys: Agar pehli fail hui, toh dusri try karega
+    for i, key in enumerate(keys):
+        try:
+            res = httpx.post(
+                "https://google.serper.dev/search", 
+                headers={"X-API-KEY": key}, 
+                json={"q": query}, 
+                timeout=10.0
+            )
+            
+            # Agar success hua (200 OK), toh turant result wapas bhej do
+            if res.status_code == 200:
+                results = res.json().get("organic", [])
+                return "\n".join([f"- {r.get('title')}: {r.get('snippet')}" for r in results[:3]])
+            else:
+                logger.warning(f"Serper Key {i+1} failed with status {res.status_code}. Trying next...")
+                continue # Key fail hui, agli try karo
+                
+        except Exception as e:
+            logger.warning(f"Serper Key {i+1} threw an error: {e}. Trying next...")
+            continue # Internet/Timeout error aaya, agli key try karo
+            
+    # Agar saari keys exhaust ho gayi ya limits khatam ho gayi
+    return "Internet search is currently unavailable due to heavy traffic."
 
 def get_dynamic_examples(question: str, user_name: str) -> str:
     try:
@@ -198,7 +230,20 @@ def ask_ai(request: UserRequest):
     else:
         lib_keys, wrk_keys = get_groq_keys("librarian"), get_groq_keys("worker")
         
-        lib_prompt = f"Question: {request.question}\nDoes this require current internet search? Reply only YES or NO."
+      # 🚀 SMART LIBRARIAN PROMPT
+        lib_prompt = (
+            f"Analyze this question carefully: '{request.question}'\n"
+            f"Does this question require checking REAL-TIME, CURRENT, or CHANGING internet data to answer accurately?\n"
+            f"Examples that MUST return YES:\n"
+            f"- Current prices (Gold, Silver, Stocks, Crypto)\n"
+            f"- Today's news, weather, or live match scores\n"
+            f"- Latest events, current dates, or recent releases\n\n"
+            f"Examples that MUST return NO:\n"
+            f"- General knowledge (How to write Python, History of India)\n"
+            f"- Personal chat (Hi, How are you?)\n"
+            f"- Logic or math questions\n\n"
+            f"Reply strictly with ONLY one word: YES or NO."
+        )
         need_search, l_tok = direct_groq_call(lib_prompt, "librarian", lib_keys)
         c_tok += l_tok
         
