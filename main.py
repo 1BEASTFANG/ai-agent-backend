@@ -10,6 +10,8 @@ import logging
 import asyncio 
 import httpx   
 import certifi 
+from fastapi import BackgroundTasks
+from fastapi.responses import StreamingResponse # 🚀 NAYA IMPORT STREAMING KE LIYE
 from pinecone import Pinecone
 from datetime import datetime
 from fastapi import FastAPI
@@ -62,24 +64,20 @@ def get_embedding(text):
     except Exception: return [0.0] * 384
 
 # ==========================================
-# 🌐 ADVANCED WEB SEARCH ENGINE (WITH KEY ROTATION)
+# 🌐 ADVANCED WEB SEARCH ENGINE
 # ==========================================
 def get_serper_keys():
-    # 🚀 SECURE MODE: Ab keys code mein nahi, Environment se aayengi!
     keys = [
         os.getenv("SERPER_API_KEY_1", "").strip(),
         os.getenv("SERPER_API_KEY_2", "").strip(),
-        os.getenv("SERPER_API_KEY_3", "").strip() # Backup ke liye
+        os.getenv("SERPER_API_KEY_3", "").strip() 
     ]
-    # Jo keys exist karti hain aur khali nahi hain, sirf unhe return karo
     return [k for k in keys if k]
 
 def search_web(query):
     keys = get_serper_keys()
-    if not keys: 
-        return "No internet access (API keys missing)."
+    if not keys: return "No internet access (API keys missing)."
     
-    # Loop through keys: Agar pehli fail hui, toh dusri try karega
     for i, key in enumerate(keys):
         try:
             res = httpx.post(
@@ -88,20 +86,16 @@ def search_web(query):
                 json={"q": query}, 
                 timeout=10.0
             )
-            
-            # Agar success hua (200 OK), toh turant result wapas bhej do
             if res.status_code == 200:
                 results = res.json().get("organic", [])
                 return "\n".join([f"- {r.get('title')}: {r.get('snippet')}" for r in results[:3]])
             else:
                 logger.warning(f"Serper Key {i+1} failed with status {res.status_code}. Trying next...")
-                continue # Key fail hui, agli try karo
-                
+                continue 
         except Exception as e:
             logger.warning(f"Serper Key {i+1} threw an error: {e}. Trying next...")
-            continue # Internet/Timeout error aaya, agli key try karo
+            continue 
             
-    # Agar saari keys exhaust ho gayi ya limits khatam ho gayi
     return "Internet search is currently unavailable due to heavy traffic."
 
 def get_dynamic_examples(question: str, user_name: str) -> str:
@@ -118,7 +112,7 @@ def get_dynamic_examples(question: str, user_name: str) -> str:
     return f"Output: 'Ji {user_name} bhai! Iska jawab yeh raha...'"
 
 # ==========================================
-# 🧠 3. DIRECT GROQ API ENGINE
+# 🧠 3. DIRECT GROQ API ENGINES (Normal & Stream)
 # ==========================================
 def get_groq_keys(role):
     if role == "librarian": start, end = 1, 5
@@ -144,6 +138,30 @@ def direct_groq_call(prompt, role, keys):
         except Exception: continue
     return "Error: System busy", 0
 
+# 🚀 NAYA: STREAMING GENERATOR FOR CHATGPT STYLE TYPING
+async def async_stream_groq(prompt, role, keys):
+    model_name = "llama-3.1-8b-instant" if role == "fast_core" else "llama-3.3-70b-versatile"
+    for key in keys:
+        try:
+            headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
+            payload = {"model": model_name, "messages": [{"role": "user", "content": prompt}], "temperature": 0.2, "stream": True}
+            
+            async with httpx.AsyncClient() as client:
+                async with client.stream("POST", "https://api.groq.com/openai/v1/chat/completions", headers=headers, json=payload, timeout=20.0) as response:
+                    if response.status_code == 200:
+                        async for line in response.aiter_lines():
+                            if line.startswith("data: "):
+                                data_str = line[6:]
+                                if data_str == "[DONE]": return
+                                try:
+                                    chunk = json.loads(data_str)
+                                    content = chunk["choices"][0].get("delta", {}).get("content", "")
+                                    if content: yield content # 🚀 Yahan ek-ek word nikalega!
+                                except Exception: pass
+                        return
+        except Exception: continue
+    yield "Error: Server overloaded."
+
 class UserRequest(BaseModel):
     session_id: str
     user_name: str
@@ -152,10 +170,33 @@ class UserRequest(BaseModel):
     is_point_wise: bool = False 
 
 # ==========================================
-# 🏭 4. MAIN API ENDPOINT (V19.4 Fix Parroting)
+# ⚡ BACKGROUND TASK (Saves Time)
+# ==========================================
+def save_memory_background(session_id, question, clean_answer, total_tokens, engine_choice, today_date, current_time):
+    # 1. MongoDB Update
+    if MONGO_URL and total_tokens > 0:
+        try:
+            db_updates = {"total_tokens": total_tokens, "api_calls": 1}
+            if engine_choice == "gemini_native": db_updates["fast_core_tokens"] = total_tokens
+            else: db_updates["deep_core_tokens"] = total_tokens
+                
+            token_stats_col.update_one({"date_str": today_date}, {"$inc": db_updates}, upsert=True)
+            messages_col.insert_one({"session_id": session_id, "user_query": question, "ai_response": clean_answer, "timestamp": current_time})
+        except Exception as e: logger.error(f"Mongo Background Error: {e}")
+
+    # 2. Pinecone Vector Save
+    if index and clean_answer and "Error" not in clean_answer and "Output:" not in clean_answer:
+        try: 
+            index.upsert(vectors=[{"id": str(uuid.uuid4()), "values": get_embedding(f"Q: {question} A: {clean_answer}"), "metadata": {"text": f"User: {question}\nAI: {clean_answer}"}}], namespace=session_id)
+        except Exception as e: logger.error(f"Pinecone Background Error: {e}")
+
+
+# ==========================================
+# 🏭 4A. MAIN NORMAL API ENDPOINT (Aapki existing app ke liye)
 # ==========================================
 @app.post("/ask")
-def ask_ai(request: UserRequest):
+def ask_ai(request: UserRequest, bg_tasks: BackgroundTasks):
+    start_time = time.time() # 🚀 RESPONSE TIMER START
     current_time = datetime.now().strftime("%A, %d %B %Y, %I:%M %p")
     today_date = datetime.now().strftime("%Y-%m-%d")
     user_cmd = request.question.strip().lower()
@@ -163,16 +204,13 @@ def ask_ai(request: UserRequest):
     if user_cmd == "#total_tokens":
         stat = token_stats_col.find_one({"date_str": today_date}) if MONGO_URL else None
         if stat:
-            msg = (f"📊 **SYSTEM ADMIN REPORT (V19.4)** 📊\n\n📅 **Date:** {today_date}\n"
+            msg = (f"📊 **SYSTEM ADMIN REPORT (V19.5)** 📊\n\n📅 **Date:** {today_date}\n"
                    f"🔄 **Total Tokens Today:** {stat.get('total_tokens', 0)}\n"
                    f"📞 **Total API Calls:** {stat.get('api_calls', 0)}\n"
                    f"🧠 **Deep Core:** {stat.get('deep_core_tokens', 0)} tokens\n"
                    f"⚡ **Fast Core:** {stat.get('fast_core_tokens', 0)} tokens")
         else: msg = "Aaj abhi tak koi token use nahi hua hai."
         return {"answer": f"{msg}\n\n[Engine: Admin 🛡️]"}
-        
-    elif user_cmd == "#system_status":
-        return {"answer": f"🟢 **SYSTEM STATUS: ONLINE (V19.4 Strict Anti-Parrot)** 🟢\n\n🚀 Engines: Fast Mode (Casual) + Deep Core (Structured)\n🧠 Memory: Pinecone Vault\n[Engine: Admin 🛡️]"}
         
     elif user_cmd == "#flush_memory":
         if MONGO_URL: messages_col.delete_many({"session_id": request.session_id})
@@ -194,56 +232,22 @@ def ask_ai(request: UserRequest):
         history = "\n".join([f"U: {m['user_query']}\nA: {re.sub(r'\[Engine:.*?\]', '', m['ai_response']).strip()}" for m in reversed(past)])
 
     total_tokens, w_tok, c_tok = 0, 0, 0
-    engine_used = ""
+    clean_answer = ""
     footer_msg = ""
 
-    # ==========================================
-    # ⚡ CORE 1: FAST MODE (Strictly Natural Chat)
-    # ==========================================
     if request.engine_choice == "gemini_native":
         fast_keys = get_groq_keys("fast_core")
-        
-        # 🚀 FIX: Removed examples entirely. Forced natural chat.
-        fast_prompt = (
-            f"System: You are {request.user_name}'s fast, casual, and friendly AI assistant.\n\n"
-            f"=== MEMORY ===\n{vector_context}\n\n"
-            f"=== CONVERSATION ===\n"
-            f"History: {history}\n"
-            f"User: {request.question}\n\n"
-            f"CRITICAL RULES:\n"
-            f"1. Reply naturally like a friend in Hinglish.\n"
-            f"2. Keep it SHORT (1-3 sentences max).\n"
-            f"3. STRICTLY NO bullet points, NO headings, and NO lists.\n"
-            f"4. Just answer the user's current message directly.\n"
-            f"AI Response:"
-        )
+        fast_prompt = f"System: You are {request.user_name}'s fast AI assistant.\n\n=== MEMORY ===\n{vector_context}\n\n=== CONVERSATION ===\nHistory: {history}\nUser: {request.question}\n\nCRITICAL RULES:\n1. Reply naturally like a friend in Hinglish.\n2. Keep it SHORT.\nAI Response:"
         
         raw_answer, c_tok = direct_groq_call(fast_prompt, "fast_core", fast_keys)
         total_tokens = c_tok
         clean_answer = re.sub(r'(?i)(Word Count|Note:|Validation|Task:|AI Response:).*', '', str(raw_answer), flags=re.DOTALL).strip()
-        
-        footer_msg = f"[V19.4 Fast Core ⚡ | Tokens: {total_tokens} | Switch to 'Groq 4-Tier' for Deep Info]"
+        elapsed_time = round(time.time() - start_time, 2)
+        footer_msg = f"[V19.5 Fast Core ⚡ | ⏱️ {elapsed_time}s | ⚙️ {total_tokens} ]"
 
-    # ==========================================
-    # 🧠 CORE 2: DEEP RESEARCH MODE (Smart Formatting)
-    # ==========================================
     else:
         lib_keys, wrk_keys = get_groq_keys("librarian"), get_groq_keys("worker")
-        
-      # 🚀 SMART LIBRARIAN PROMPT
-        lib_prompt = (
-            f"Analyze this question carefully: '{request.question}'\n"
-            f"Does this question require checking REAL-TIME, CURRENT, or CHANGING internet data to answer accurately?\n"
-            f"Examples that MUST return YES:\n"
-            f"- Current prices (Gold, Silver, Stocks, Crypto)\n"
-            f"- Today's news, weather, or live match scores\n"
-            f"- Latest events, current dates, or recent releases\n\n"
-            f"Examples that MUST return NO:\n"
-            f"- General knowledge (How to write Python, History of India)\n"
-            f"- Personal chat (Hi, How are you?)\n"
-            f"- Logic or math questions\n\n"
-            f"Reply strictly with ONLY one word: YES or NO."
-        )
+        lib_prompt = f"Analyze this question carefully: '{request.question}'\nDoes this require checking REAL-TIME internet data? Reply YES or NO."
         need_search, l_tok = direct_groq_call(lib_prompt, "librarian", lib_keys)
         c_tok += l_tok
         
@@ -253,53 +257,99 @@ def ask_ai(request: UserRequest):
 
         dynamic_examples = get_dynamic_examples(request.question, request.user_name)
 
-        # 🚀 FIX: Extreme warning added to NOT copy the examples' content.
         master_prompt = (
-            f"System: You are {request.user_name}'s highly intelligent AI assistant.\n\n"
-            f"=== REAL DATA (USE THIS TO ANSWER) ===\nMemory: {vector_context}\nWeb Search: {web_data}\n\n"
-            f"=== STYLE TEMPLATES (FORMAT ONLY) ===\n{dynamic_examples}\n"
-            f"⚠️ WARNING: DO NOT talk about the topics in the STYLE TEMPLATES (like Chai, Gaming, or Cricket) unless the user explicitly asks about them!\n\n"
-            f"=== CONVERSATION ===\n"
-            f"History: {history}\n"
-            f"User: {request.question}\n\n"
-            f"RULES:\n"
-            f"1. Answer the user's specific question using REAL DATA.\n"
-            f"2. Write in normal paragraphs. ONLY use bullet points if you are listing 3 or more distinct items/steps.\n"
-            f"3. Be friendly in Hinglish with emojis.\n"
-            f"AI Response:"
+            f"System: You are {request.user_name}'s highly intelligent AI.\n\n"
+            f"=== REAL DATA ===\nMemory: {vector_context}\nWeb Search: {web_data}\n\n"
+            f"=== CONVERSATION ===\nHistory: {history}\nUser: {request.question}\n\n"
+            f"RULES:\n1. Use real data.\n2. Be friendly in Hinglish with emojis.\nAI Response:"
         )
-                         
+                          
         raw_answer, w_tok = direct_groq_call(master_prompt, "worker", wrk_keys)
         total_tokens = w_tok + c_tok
-        
         clean_answer = re.sub(r'(?i)(Word Count|Note:|Validation|Task:|AI Response:|Here is the response).*', '', str(raw_answer), flags=re.DOTALL).strip()
-        if clean_answer.startswith("'") and clean_answer.endswith("'"): clean_answer = clean_answer[1:-1].strip()
-        if clean_answer.startswith('"') and clean_answer.endswith('"'): clean_answer = clean_answer[1:-1].strip()
-        
-        footer_msg = f"[V19.4 Deep Core 🧠 | Tokens: {total_tokens}]"
+        elapsed_time = round(time.time() - start_time, 2)
+        footer_msg = f"[V19.5 Deep Core 🧠 | ⏱️ {elapsed_time}s | ⚙️ {total_tokens} ]"
 
-    # --- 💾 DB UPDATE ---
-    if MONGO_URL and total_tokens > 0:
-        db_updates = {"total_tokens": total_tokens, "api_calls": 1}
-        if request.engine_choice == "gemini_native":
-            db_updates["fast_core_tokens"] = total_tokens
-        else:
-            db_updates["deep_core_tokens"] = total_tokens
-            
-        token_stats_col.update_one({"date_str": today_date}, {"$inc": db_updates}, upsert=True)
-        messages_col.insert_one({"session_id": request.session_id, "user_query": request.question, "ai_response": f"{clean_answer}\n\n{footer_msg}", "timestamp": current_time})
-
-    if index and clean_answer and "Error" not in clean_answer and "Output:" not in clean_answer:
-        try: index.upsert(vectors=[{"id": str(uuid.uuid4()), "values": get_embedding(f"Q: {request.question} A: {clean_answer}"), "metadata": {"text": f"User: {request.question}\nAI: {clean_answer}"}}], namespace=request.session_id)
-        except Exception: pass
-
+    bg_tasks.add_task(save_memory_background, request.session_id, request.question, f"{clean_answer}\n\n{footer_msg}", total_tokens, request.engine_choice, today_date, current_time)
     return {"answer": f"{clean_answer}\n\n{footer_msg}"}
+
+# ==========================================
+# 🏭 4B. NAYA STREAMING ENDPOINT (Flutter App ke naye feature ke liye)
+# ==========================================
+@app.post("/ask_stream")
+async def ask_ai_stream(request: UserRequest):
+    start_time = time.time()
+    current_time = datetime.now().strftime("%A, %d %B %Y, %I:%M %p")
+    today_date = datetime.now().strftime("%Y-%m-%d")
+
+    vector_context = "No past facts."
+    try:
+        if index:
+            results = index.query(vector=get_embedding(request.question), top_k=2, include_metadata=True, namespace=request.session_id)
+            if results and results.get('matches'): vector_context = "\n".join([m['metadata']['text'] for m in results['matches']])
+    except Exception: pass
+
+    history = ""
+    if MONGO_URL:
+        past = list(messages_col.find({"session_id": request.session_id}).sort("_id", -1).limit(3))
+        history = "\n".join([f"U: {m['user_query']}\nA: {re.sub(r'\[Engine:.*?\]', '', m['ai_response']).strip()}" for m in reversed(past)])
+
+    # Generator jo word by word answer dega
+    async def response_generator():
+        full_answer = ""
+        footer_msg = ""
+        estimated_tokens = 0
+        
+        if request.engine_choice == "gemini_native":
+            fast_keys = get_groq_keys("fast_core")
+            fast_prompt = f"System: You are {request.user_name}'s fast AI assistant.\n\n=== MEMORY ===\n{vector_context}\n\n=== CONVERSATION ===\nHistory: {history}\nUser: {request.question}\n\nRULES:\n1. Reply naturally in Hinglish.\n2. Keep it SHORT.\nAI Response:"
+            
+            async for chunk in async_stream_groq(fast_prompt, "fast_core", fast_keys):
+                full_answer += chunk
+                yield chunk
+            
+            estimated_tokens = len(full_answer) // 4
+            elapsed_time = round(time.time() - start_time, 2)
+            footer_msg = f"\n\n[V20 Stream ⚡ | ⏱️ {elapsed_time}s | ⚙️ ~{estimated_tokens}]"
+            yield footer_msg
+            
+        else:
+            lib_keys, wrk_keys = get_groq_keys("librarian"), get_groq_keys("worker")
+            lib_prompt = f"Analyze: '{request.question}'. Requires checking internet? YES or NO."
+            need_search, _ = direct_groq_call(lib_prompt, "librarian", lib_keys)
+            
+            web_data = ""
+            if "YES" in str(need_search).upper():
+                web_data = f"Web Search Info:\n{search_web(request.question)}"
+
+            master_prompt = (
+                f"System: You are {request.user_name}'s highly intelligent AI.\n\n"
+                f"=== DATA ===\nMemory: {vector_context}\nWeb Search: {web_data}\n\n"
+                f"=== CONVERSATION ===\nHistory: {history}\nUser: {request.question}\n\n"
+                f"RULES:\n1. Use real data.\n2. Be friendly in Hinglish with emojis.\nAI Response:"
+            )
+            
+            async for chunk in async_stream_groq(master_prompt, "worker", wrk_keys):
+                full_answer += chunk
+                yield chunk
+                
+            estimated_tokens = len(full_answer) // 4
+            elapsed_time = round(time.time() - start_time, 2)
+            footer_msg = f"\n\n[V20 Stream 🧠 | ⏱️ {elapsed_time}s | ⚙️ ~{estimated_tokens}]"
+            yield footer_msg
+
+        # Stream khatam hone ke baad DB me save karega (Parde ke peeche)
+        loop = asyncio.get_running_loop()
+        loop.run_in_executor(None, save_memory_background, request.session_id, request.question, full_answer + footer_msg, estimated_tokens, request.engine_choice, today_date, current_time)
+
+    # Returning the stream
+    return StreamingResponse(response_generator(), media_type="text/plain")
 
 # ==========================================
 # 🚀 5. KEEP-ALIVE
 # ==========================================
 @app.api_route("/", methods=["GET", "HEAD"])
-def home(): return {"status": "V19.4 Strict Anti-Parrot Pipeline Active"}
+def home(): return {"status": "V20.0 Live & Streaming Engine Active"}
 
 @app.get("/ping")
 def ping(): return {"status": "Main jag raha hoon bhai!"}
