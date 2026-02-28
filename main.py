@@ -25,6 +25,9 @@ from pymongo import MongoClient
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
+# 👑 ADMIN PASSWORD (Aap ise Render ke Environment variables me set kar sakte hain)
+ADMIN_SECRET = os.getenv("ADMIN_PASSWORD", "akhilboss123") 
+
 MONGO_URL = os.getenv("MONGO_URL")
 try:
     if MONGO_URL:
@@ -136,6 +139,7 @@ def direct_groq_call(prompt, role, keys):
         except Exception: continue
     return "Error: System busy", 0
 
+# 🚀 THE MAGIC: ARTIFICIAL DELAY ADDED HERE FOR TYPING EFFECT
 async def async_stream_groq(prompt, role, keys):
     model_name = "llama-3.1-8b-instant" if role == "fast_core" else "llama-3.3-70b-versatile"
     for key in keys:
@@ -146,6 +150,9 @@ async def async_stream_groq(prompt, role, keys):
             async with httpx.AsyncClient() as client:
                 async with client.stream("POST", "https://api.groq.com/openai/v1/chat/completions", headers=headers, json=payload, timeout=20.0) as response:
                     if response.status_code == 200:
+                        # Dummy spaces bhejna zaroori hai taaki proxy turant connection khol de
+                        yield " " * 1000 
+
                         async for line in response.aiter_lines():
                             if line.startswith("data: "):
                                 data_str = line[6:]
@@ -153,7 +160,10 @@ async def async_stream_groq(prompt, role, keys):
                                 try:
                                     chunk = json.loads(data_str)
                                     content = chunk["choices"][0].get("delta", {}).get("content", "")
-                                    if content: yield content 
+                                    if content: 
+                                        yield content 
+                                        # 🚀 ASLI JADOO: Delay of 20 milliseconds to simulate human typing
+                                        await asyncio.sleep(0.02)
                                 except Exception: pass
                         return
         except Exception: continue
@@ -359,61 +369,48 @@ async def ask_ai_stream(request: UserRequest):
             yield footer_msg
 
         loop = asyncio.get_running_loop()
-        loop.run_in_executor(None, save_memory_background, request.session_id, request.question, full_answer + footer_msg, estimated_tokens, request.engine_choice, today_date, current_time)
+        loop.run_in_executor(None, save_memory_background, request.session_id, request.question, full_answer.strip() + footer_msg, estimated_tokens, request.engine_choice, today_date, current_time)
 
-   # 🚀 NAYA: Render ko buffering rokne ka order de rahe hain!
+    # 🚀 NAYA: Rendering proxy ko rokne ke liye specific headers add kiye gaye hain
     return StreamingResponse(
         response_generator(), 
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",
             "Connection": "keep-alive",
-            "X-Accel-Buffering": "no" # 🔥 MAGIC LINE: Ye Render ko rokega data hold karne se
+            "X-Accel-Buffering": "no" 
         }
     )
-
 
 # ==========================================
 # 🌟 5. PHASE 2 COMMUNITY & ADMIN ROUTES
 # ==========================================
 
-# 📥 5A. User Feedback (Like/Dislike Storage)
 @app.post("/feedback")
 def submit_feedback(req: FeedbackRequest):
     if MONGO_URL:
         try:
             feedback_col.insert_one({
-                "user_name": req.user_name,
-                "ai_response": req.ai_response,
-                "feedback": req.feedback_text,
-                "is_like": req.is_like,
-                "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M"),
-                "created_at": datetime.utcnow() # TTL ke liye
+                "user_name": req.user_name, "ai_response": req.ai_response,
+                "feedback": req.feedback_text, "is_like": req.is_like,
+                "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M"), "created_at": datetime.utcnow()
             })
             return {"status": "Success"}
         except Exception as e: return {"error": str(e)}
     return {"error": "DB missing"}
 
-# ✍️ 5B. Admin Blog Post Route
 @app.post("/admin/post_blog")
 def post_blog(req: AdminBlogRequest):
-    # 🚀 DYNAMIC PASSWORD CHECK (Render Environment se live fetch karega)
     current_admin_pass = os.getenv("ADMIN_PASSWORD", "akhilboss123")
-    
     if req.admin_password != current_admin_pass:
         raise HTTPException(status_code=403, detail="Galat Password Bhai! Access Denied.")
-    
     if MONGO_URL:
         blog_col.insert_one({
-            "title": req.title,
-            "content": req.content,
-            "image_url": req.image_url,
-            "timestamp": datetime.now().strftime("%d %b %Y"),
-            "created_at": datetime.utcnow() # Ye delete nahi hoga
+            "title": req.title, "content": req.content, "image_url": req.image_url,
+            "timestamp": datetime.now().strftime("%d %b %Y"), "created_at": datetime.utcnow()
         })
         return {"status": "Blog published successfully!"}
 
-# 📖 5C. Fetch Blogs for App
 @app.get("/get_blogs")
 def get_blogs():
     if MONGO_URL:
@@ -421,27 +418,21 @@ def get_blogs():
         return {"blogs": blogs}
     return {"blogs": []}
 
-# 🌍 5D. Global Community Chat (Post)
 @app.post("/global_chat/post")
 def post_global_chat(req: GlobalMessageRequest):
     if MONGO_URL:
         global_chat_col.insert_one({
-            "user_name": req.user_name,
-            "message": req.message,
-            "timestamp": datetime.now().strftime("%H:%M, %d %b"),
-            "created_at": datetime.utcnow() # TTL 7 days
+            "user_name": req.user_name, "message": req.message,
+            "timestamp": datetime.now().strftime("%H:%M, %d %b"), "created_at": datetime.utcnow()
         })
         return {"status": "Sent"}
 
-# 🌍 5E. Global Community Chat (Get)
 @app.get("/global_chat/get")
 def get_global_chat():
     if MONGO_URL:
-        # Aakhri 50 messages uthayenge
         messages = list(global_chat_col.find({}, {"_id": 0}).sort("created_at", -1).limit(50))
-        return {"messages": messages[::-1]} # Seedha karke bhejo
+        return {"messages": messages[::-1]}
     return {"messages": []}
-
 
 # ==========================================
 # 🚀 6. KEEP-ALIVE & STARTUP
@@ -456,11 +447,10 @@ async def keep_alive_loop():
     while True:
         await asyncio.sleep(14 * 60) 
         try:
-            async with httpx.AsyncClient() as client:
-                await client.get("https://ai-agent-backend-bek6.onrender.com/ping")
+            async with httpx.AsyncClient() as client: await client.get("https://ai-agent-backend-bek6.onrender.com/ping")
         except Exception: pass
 
 @app.on_event("startup")
 async def startup_event():
-    setup_ttl_indexes() # 🚀 Start hote hi safayi wala index laga dega
+    setup_ttl_indexes() 
     asyncio.create_task(keep_alive_loop())
